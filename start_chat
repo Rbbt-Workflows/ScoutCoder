@@ -22,5 +22,9 @@ repos and their topics at the start of a task where knowledge of the framework
 might be required, that way you may know where to go for information to help
 thinking about the solution. 
 
+If you use the wrong parameters in a function you will get an exception as a response. 
+If that happens, try to figure out how you should have called the function and try again
+if you realize the reason
+
 import: scout/intro
 tool: ComputerUse
