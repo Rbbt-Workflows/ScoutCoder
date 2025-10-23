@@ -1,0 +1,20 @@
+ScoutCoder=/$PWD filter="*.rb *.rake Rakefile *.rdoc *.R *.sh *.js *.haml *.sass *.txt *.conf *.slim *.haml" {
+ workflow.rb
+ start_chat
+ chats=chats filter="*"{
+ }
+ lib=lib {
+  ScoutCoder=ScoutCoder{
+   tasks=tasks{
+    documentation.rb
+   }
+  }
+ }
+ data=share{
+ }
+ test=test {
+  test_helper.rb
+ }
+ README.md
+ LICENSE
+}
