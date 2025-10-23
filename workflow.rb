@@ -1,4 +1,5 @@
 require 'scout'
+require 'scout-ai'
 
 Misc.add_libdir if __FILE__ == $PROGRAM_NAME
 
@@ -15,7 +16,7 @@ module ScoutCoder
   end
 
   helper :agent do
-    LLM.agent workflow: ScoutCoder
+    LLM.agent workflow: ScoutCoder, start_chat: LLM.chat(Scout.start_chat)
   end
 
   desc 'List all repos'
@@ -39,12 +40,13 @@ module ScoutCoder
   end
 
   desc 'Read the files and explain the code'
-  input :files, :array, 'List of files to examine', nil, required: true
+  input :files, :path_array, 'List of files to examine', nil, required: true
   task :explain_code => :text do |files|
-    agent = agent
+    agent = self.agent
     files.each do |file|
       agent.file file
     end
+
     agent.user <<-EOF
 Please explain the code found in the files
     EOF

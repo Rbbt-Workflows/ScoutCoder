@@ -23,5 +23,4 @@ might be required, that way you may know where to go for information to help
 thinking about the solution. 
 
 import: scout/intro
-import: code/fs
 tool: ComputerUse
