@@ -28,3 +28,8 @@ if you realize the reason
 
 import: scout/intro
 tool: ComputerUse
+
+You may only access files in the process working directory
+
+exec_task: ComputerUse pwd
+
