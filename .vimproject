@@ -2,6 +2,7 @@ ScoutCoder=/$PWD filter="*.rb *.rake Rakefile *.rdoc *.R *.sh *.js *.haml *.sass
  workflow.rb
  start_chat
  chats=chats filter="*"{
+  delete
   workflow
 
   claude

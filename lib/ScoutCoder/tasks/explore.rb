@@ -9,7 +9,7 @@ module ScoutCoder
     end
 
     agent.user <<-EOF
-Please explain the code found in the files
+Please explain the code found in the files.
     EOF
 
     agent.chat
@@ -18,8 +18,8 @@ Please explain the code found in the files
   desc 'Read the file and make a summary'
   input :file, :path, 'File to examine', nil, required: true
   task :summarize_file => :text do |file|
-    raise ParameterException, "File not readable #{file}" unless Open.exists?(file) && ! Open.directory?(file)
-    agent = self.agent
+    raise ParameterException, "File not readable #{file}" unless file && Open.exists?(file) && ! Open.directory?(file)
+    agent = self.agent nil
     agent.file file
 
     agent.user <<-EOF
@@ -54,6 +54,9 @@ and return a description of what you find. You may use the repo documentation
 to help you understand what you find in the files
 
 Try not to load into context large files, instead use the summarize_file tool.
+
+Consider batching your tool calls, for instance to summarize a list of files at the
+same time.
     EOF
 
     agent.task ComputerUse, :list_directory, directory: directory, recursive: true, stats: true
@@ -79,6 +82,4 @@ Now produce the full markdown content following the draft structure you generate
       agent.save file('chat')
     end
   end
-  
-  export :explain_code, :summarize_file, :explore_directory_structure
 end

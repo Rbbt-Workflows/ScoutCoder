@@ -24,6 +24,4 @@ module ScoutCoder
     raise ParameterException, "Not found #{document} in #{repo}" if file.nil?
     file.read
   end
-
-  export :help_list_repos, :help_list_repo_documents, :help_get_repo_document
 end

@@ -28,6 +28,4 @@ Please follow the following instructions:
 
     agent.chat
   end
-
-  export_exec :implement
 end

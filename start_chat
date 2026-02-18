@@ -24,12 +24,14 @@ thinking about the solution.
 
 If you use the wrong parameters in a function you will get an exception as a response. 
 If that happens, try to figure out how you should have called the function and try again
-if you realize the reason
+if you realize the reason.
+
+Never use emojis.
 
 import: scout/intro
-tool: ComputerUse
 
-You may only access files in the process working directory
+You may only access files in the process working directory:
 
 exec_task: ComputerUse pwd
+
 
