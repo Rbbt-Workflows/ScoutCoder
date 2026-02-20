@@ -34,4 +34,5 @@ You may only access files in the process working directory:
 
 exec_task: ComputerUse pwd
 
-
+introduce: ComputerUse
+introduce: ScoutCoder
