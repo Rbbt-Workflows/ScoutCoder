@@ -41,7 +41,3 @@ ScoutCoder.include_workflow ComputerUse
 #ScoutCoder.export :explore_directory_structure, :summarize_file, :explain_code
 #ScoutCoder.export :help_list_repos, :help_list_repo_documents, :help_get_repo_document, :documentation_overview
 
-
-#require 'rbbt/knowledge_base/ScoutCoder'
-#require 'rbbt/entity/ScoutCoder'
-

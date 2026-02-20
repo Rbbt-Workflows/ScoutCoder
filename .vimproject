@@ -4,8 +4,9 @@ ScoutCoder=/$PWD filter="*.rb *.rake Rakefile *.rdoc *.R *.sh *.js *.haml *.sass
  chats=chats filter="*"{
   delete
   workflow
-
   claude
+
+  implement
  }
  lib=lib {
   ScoutCoder=ScoutCoder{
