@@ -5,4 +5,8 @@ developer agent to do it. Make sure the task is completed correctly.
 
 The developer understands how to code in the Scout framework, but will need
 complete instructions, since it will not have been told anything about the
-project. Make sure to communicate what you need him to know
+project. Make sure to communicate what you need him to know.
+
+In particular add examples and code suggestions for things that are not
+obvious. You have access to the documentation system, but the developer
+does not, he needs to recieve very detailed instructions.

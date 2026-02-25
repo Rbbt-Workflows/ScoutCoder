@@ -25,7 +25,6 @@ module ScoutCoder
       LLM.agent **options
     end
   end
-
 end
 
 require 'ScoutCoder/tasks/documentation.rb'
@@ -34,12 +33,14 @@ require 'ScoutCoder/tasks/develop.rb'
 
 ScoutCoder.include_workflow ComputerUse
 
-ScoutCoder.all_exports.clear
-ScoutCoder.synchronous_exports.clear
-ScoutCoder.asynchronous_exports.clear
-ScoutCoder.exec_exports.clear
-ScoutCoder.export_exec :write, :read, :list_directory, :patch, :bash, :ruby, :python, :search
-ScoutCoder.export :explore_directory_structure, :summarize_file, :explain_code
+#ScoutCoder.all_exports.clear
+#ScoutCoder.synchronous_exports.clear
+#ScoutCoder.asynchronous_exports.clear
+#ScoutCoder.exec_exports.clear
+#ScoutCoder.export_exec :write, :read, :list_directory, :patch, :bash, :ruby, :python, :search
+#ScoutCoder.export :explore_directory_structure, :summarize_file, :explain_code
+#ScoutCoder.export :help_list_repos, :help_list_repo_documents, :help_get_repo_document, :documentation_overview
+
 
 #require 'rbbt/knowledge_base/ScoutCoder'
 #require 'rbbt/entity/ScoutCoder'

@@ -8,9 +8,13 @@ module ScoutCoder
       agent.file file
     end
 
+    agent.task ScoutCoder, :documentation_overview
+
     agent.user <<-EOF
 Please explain the code found in the files.
+Read the scout documentation as you need it.
     EOF
+
 
     agent.chat
   end
@@ -38,7 +42,8 @@ Summarize this file
 
 # Task
 
-Write a markdown description of the contents of #{directory}.
+Write a markdown description of the contents of #{directory}, assumed to contain
+a project e.g. like a software project or a data analysis project.
 
 # Instructions
 
@@ -48,24 +53,28 @@ Write a markdown description of the contents of #{directory}.
 - Try not to overload your own context reading too many files, make use of the 'file_stats' and 'summarize_file' to help you see how large files are and synthezise short descriptions; 
 - If you identify code files that are related, you can use 'explain_code' to get an explanation of the code on all those files
 
-Use the tools list_directory, read, file_stats, summarize_file, etc. to
-traverse the directory structure under directory #{File.expand_path directory}
-and return a description of what you find. You may use the repo documentation
-to help you understand what you find in the files
+Use the tools list_directory, read, file_stats, summarize_file, explain_code,
+etc. to traverse the directory structure under directory #{File.expand_path directory} 
+and return a description of what you find. You may use the repo
+documentation to help you understand what you find in the files
 
-Try not to load into context large files, instead use the summarize_file tool.
+Try not to load into context large files, consider instead using the summarize_file tool.
 
-Consider batching your tool calls, for instance to summarize a list of files at the
-same time.
+You may ask for the output of several tools at the same time, for instance to summarize
+a list of files in one go.
     EOF
 
     agent.task ComputerUse, :list_directory, directory: directory, recursive: true, stats: true
 
     agent.user <<-EOF
-Before you write anything, plan what topics to write about and how they would help other agents. Use
-these topics later as the structure of the final document. 
+Before you write your final report, plan what topics to write about and how
+they would help other agents, and use them as the structure of the final
+document. 
 
-Write a first draft with only the key points
+Aim for a concise document that serves as a guide to other agents to
+know what the project is about and what they can expect to find and were. 
+If they are interested in the project they can use this guide to 
+quickly know where to start.
     EOF
 
     agent.chat
