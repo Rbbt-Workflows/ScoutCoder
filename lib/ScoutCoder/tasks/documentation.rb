@@ -5,18 +5,15 @@ module ScoutCoder
     Path.setup File.join(ENV['HOME'], 'git', repo)
   end
 
-  desc 'List all repos'
   task :help_list_repos => :array do
     REPOS
   end
 
-  desc 'List documents about a repo'
   input :repo, :select, 'Repo of inquire', nil, required: true, select_options: REPOS
   task :help_list_repo_documents => :array do |repo|
     repo_dir(repo).glob_names('doc*/*')
   end
 
-  desc 'Get repo document'
   input :repo, :select, 'Repo of inquire', nil, required: true, select_options: REPOS
   input :document, :string, 'Document to retrieve', nil, required: true
   task :help_get_repo_document => :text do |repo, document|
@@ -25,7 +22,7 @@ module ScoutCoder
     file.read
   end
 
-  task :documentation_overview => :text do 
+  task :help_overview => :text do 
     agent = self.agent
     agent.system <<-EOF
 You are a software documentation agent. You
@@ -55,5 +52,12 @@ with no extra commentary.
     agent.chat
   end
 
-  export :help_list_repos, :help_list_repo_documents, :help_get_repo_document, :documentation_overview
+  input :workflow, :string, 'Workflow for which to return documentation'
+  extension 'md'
+  task :help_workflow => :text do |workflow|
+    wf = Workflow.require_workflow workflow
+    wf.documentation_markdown
+  end
+
+  export :help_list_repos, :help_list_repo_documents, :help_get_repo_document, :help_overview, :help_workflow
 end
