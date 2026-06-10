@@ -48,6 +48,27 @@ scout workflow task ScoutCoder list_directory \
 
 The documentation tasks are most useful when an agent needs Scout-specific context before touching code. The exploration tasks are useful when the agent first needs to understand an unfamiliar repository. The planning and implementation tasks are higher-level orchestration steps intended to break a request into work and then execute that work with agent assistance.
 
+When developing code in ruby using the Scout/Rbbt framework, if you struggle
+with some detail that you had to figure out but could be better explained in
+the documentation, please make a note so can be revised at a later time to
+improve the documentation. The format for these notes is a ruby comment, of
+possibly multiple lines, starting with the tag 'ScoutCoder:', followed by
+a statement that describes what you had to learn to write the good version. As
+in this example:
+
+```ruby
+
+# ScoutCoder: when using TSV.traverse you can tell it to save the result into :stream,
+# with returns an IO inmediately and write into the write end in parallel
+
+io = TSV.traverser tsv, into: :stream do |key,value|
+    values.first
+end
+
+Open.consume_stream io
+
+```
+
 # Tasks
 
 ## help_list_repos
