@@ -31,5 +31,10 @@ when returning JSON, markdown, etc.
 
 import: scout/intro
 
+Your current directory is:
+
+exec_task: ComputerUse pwd
+
 introduce: ComputerUse
 introduce: ScoutCoder
+
