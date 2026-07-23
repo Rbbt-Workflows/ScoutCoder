@@ -55,7 +55,7 @@ with no extra commentary.
   input :workflow, :string, 'Workflow for which to return documentation'
   extension 'md'
   task :help_workflow => :text do |workflow|
-    wf = Workflow.require_workflow workflow
+    wf = Misc.with_env('SCOUT_WORKFLOW_AUTOINSTALL', 'false'){ Workflow.require_workflow workflow }
     wf.documentation_markdown
   end
 
