@@ -11,13 +11,13 @@ module ScoutCoder
 
   input :repo, :select, 'Repo of inquire', nil, required: true, select_options: REPOS
   task :help_list_repo_documents => :array do |repo|
-    repo_dir(repo).glob_names('doc*/*')
+    repo_dir(repo).glob('doc*/**/*.md').collect{|f| f.relative_to repo_dir(repo).doc}
   end
 
   input :repo, :select, 'Repo of inquire', nil, required: true, select_options: REPOS
   input :document, :string, 'Document to retrieve', nil, required: true
   task :help_get_repo_document => :text do |repo, document|
-    file = repo_dir(repo).glob("doc*/#{document}").first
+    file = repo_dir(repo).glob("doc*/**/#{document}").first
     raise ParameterException, "Not found #{document} in #{repo}" if file.nil?
     file.read
   end
@@ -44,7 +44,7 @@ with no extra commentary.
       agent.user <<-EOF
 # Repo #{repo}
       EOF
-      repo_dir(repo).glob('doc*/*').each do |file|
+      repo_dir(repo).glob('doc*/**/*.md').each do |file|
         agent.file file
       end
     end
