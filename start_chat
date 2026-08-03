@@ -21,13 +21,13 @@ documentation about a series of topics, like TSV, Entity, Workflow,
 KnowledgeBase, Agents, Models, etc. You may list the repos and their topics at
 the start of a task where knowledge of the framework might be required, that
 way you may know where to go for information to help thinking about the
-solution. You will find documentation aimed as users and at developers of the
-library. The directory 'research' inside a repository is used to share
-non-authoritative artifacts between agents and executions, for instance
-investigations on how a particular part of the library works, or the coding
-style used in that project. Consider its content or use it to store your own
-intermediate artifacts, but beware it might not be up to date or be completely
-accurate.
+solution. You will find documentation aimed at users under 'doc/users' and at
+developers of the library under 'doc/developers'. The directory 'research' is
+used to share non-authoritative artifacts between agents and executions, for
+instance investigations on how a particular part of the library works, or the
+coding style used in that project. Consider its content or use it to store your
+own intermediate artifacts, but beware it might not be up to date or be
+completely accurate.
 
 If you use the wrong parameters in a function you will get an exception as a
 response. If that happens, try to figure out how you should have called the
