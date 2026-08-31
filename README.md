@@ -1,4 +1,4 @@
-ScoutCoder is an AI-assisted Scout workflow for retrieving framework documentation, exploring project files, and coordinating multi-agent development work over a local codebase.
+ScoutCoder is an AI-assisted Scout workflow for retrieving framework documentation, exploring project files, and coordinating multi-agent development work over a local codebase. The documentation lookup also covers any installed Scout workflow, since workflows can carry their own README.md, doc*/ and research/ folders in the same format as Scout repositories.
 
 The workflow combines three complementary capabilities. First, it exposes documentation lookup tasks for the Scout ecosystem, backed by local clones of the `scout-gear`, `scout-essentials`, `scout-camp`, `scout-ai`, and `scout-rig` repositories under `~/git`. Second, it provides project-understanding tasks that can summarize files, explain code, and generate a navigable description of a directory. Third, it contains agentic planning and implementation tasks that turn a natural-language request into a plan and then into delegated work across specialized prompts.
 
@@ -19,7 +19,7 @@ docs = ScoutCoder.job(:help_list_repo_documents, nil,
 
 text = ScoutCoder.job(:help_get_repo_document, nil,
   repo: 'scout-gear',
-  document: 'Workflow.md'
+  document: 'user/Cookbook.md'
 ).run
 
 summary = ScoutCoder.job(:summarize_file, nil,
@@ -74,21 +74,29 @@ Open.consume_stream io
 ## help_list_repos
 List the Scout documentation repositories known to ScoutCoder
 
-This task returns the fixed repository list used by the rest of the documentation helpers. At the time of writing it includes `scout-gear`, `scout-essentials`, `scout-camp`, `scout-ai`, and `scout-rig`.
+This task returns the fixed list of Scout repository checkouts under `~/git` used by the rest of the documentation helpers. At the time of writing it includes `scout-gear`, `scout-essentials`, `scout-camp`, `scout-ai`, and `scout-rig`.
 
 Use this task as the discovery step when an agent knows it needs framework documentation but does not yet know where that documentation lives. The returned values are valid inputs for `help_list_repo_documents` and `help_get_repo_document`.
 
+Note that this list only contains the Scout repository checkouts under `~/git`. Installed workflow names are an additional kind of documentation source, and they are listed by `help_list_workflows` instead.
+
 ## help_list_repo_documents
-List the documentation files available in one Scout repository
+List the documentation files available in one Scout repository or workflow
 
-The `repo` input selects one repository from the known set, and the task returns the names of files found under `doc*/*` in that repository. In other words, it exposes the documentation index for that repo rather than returning file contents.
+The `repo` input is a required free string (a `:string` input declared with `nofile: true`) naming either one of the known Scout repositories under `~/git` or any installed Scout workflow (see `help_list_workflows`). The task returns the identifiers of the documentation files of that source, not their contents.
 
-This is the normal follow-up to `help_list_repos`. Agents can inspect the available document names first and then request the specific files that match the concepts they need, such as `Workflow.md`, `TSV.md`, `CMD.md`, or `Agent.md`.
+The listing covers the source's `README.md` plus all markdown files under its `doc*/` subtrees plus the markdown files under its `research/`. Identifiers are relative to their containing `doc*` directory (for example `doc/user/Cookbook.md` is listed as `user/Cookbook.md`), `README.md` keeps its literal name, and research files carry a `research/` prefix.
+
+Names that are neither a `~/git` checkout nor a resolvable installed workflow raise a controlled `ParameterException` ("Unknown repo or workflow: <name>"). This is the normal follow-up to `help_list_repos` or `help_list_workflows`: agents inspect the available document identifiers first and then request the specific files that match the concepts they need.
 
 ## help_get_repo_document
-Return the contents of a documentation file from one Scout repository
+Return the contents of a documentation file from one Scout repository or workflow
 
-The task takes a `repo` and a `document` name, locates the first matching file under `doc*/`, and returns the full text of that document. If the requested file cannot be found it raises a `ParameterException`, which makes failures explicit and easy for an agent to recover from.
+The `repo` input has the same semantics as in `help_list_repo_documents`: a required free string (declared with `nofile: true`) naming a Scout repository under `~/git` or any installed Scout workflow. The `document` input (also `nofile: true`) is one of the identifiers produced by `help_list_repo_documents`.
+
+The task resolves the document through a fallback chain: the literal `README.md` of the source, an exact identifier match from the listing, a `doc*/**/<document>` glob, a direct `research/` or `doc/` path, and finally a `research/**/<document>` glob. The full text of the first match is returned.
+
+If no step of the chain matches, the task raises a `ParameterException` whose message lists up to 10 available documents, which makes failures explicit and easy for an agent to recover from.
 
 This is the lowest-level documentation lookup task. Use it when an agent already knows the exact document it needs and wants the raw markdown to read or quote.
 
@@ -105,6 +113,13 @@ Return the markdown documentation for a workflow
 The `workflow` input names any workflow that can be loaded through `Workflow.require_workflow`. The task then calls `documentation_markdown` on that workflow and returns the result as markdown text.
 
 This is useful both for introspection and for tool discovery. For example, an agent can read the documentation for `ScoutCoder` itself, inspect the inherited `ComputerUse` workflow, or query the docs of another installed workflow before interacting with it.
+
+## help_list_workflows
+List the workflows installed and available to ScoutCoder
+
+This task unions `Workflow.installed_workflows`, a purely local scan of the `workflows` pathmap that never triggers network autoinstall, with the workflow modules already loaded in the current process. The combined list is deduplicated and sorted.
+
+It is the discovery step for workflow names: any name it returns is usable as the `repo` input of `help_list_repo_documents` and `help_get_repo_document`, which then read the workflow's own `README.md`, `doc*/`, and `research/` documentation.
 
 ## summarize_file
 Summarize one file

@@ -14,9 +14,12 @@ When asked to perform a task follow these steps:
 4- Consider if you need to report back the solution or you should implemented using the tools
 
 In order for you to know how to correctly program in the Scout programming
-languate you have access to help_list_repo_documents and
+language you have access to help_list_repo_documents and
 help_get_repo_document. The list of repos available is: 'scout-gear',
-'scout-essentials', 'scout-camp', and 'scout-ai'. There you will find
+'scout-essentials', 'scout-camp', 'scout-ai', and 'scout-rig'; in addition,
+any installed workflow name, listed by the help_list_workflows tool, is also
+accepted by these tools and gives access to the workflow's own README.md,
+doc*/, and research/ documentation. There you will find
 documentation about a series of topics, like TSV, Entity, Workflow,
 KnowledgeBase, Agents, Models, etc. You may list the repos and their topics at
 the start of a task where knowledge of the framework might be required, that
@@ -33,8 +36,10 @@ If you use the wrong parameters in a function you will get an exception as a
 response. If that happens, try to figure out how you should have called the
 function and try again, if you realize the reason.
 
-Regarding formating, never use emojis, and don't return code fences (e.g. ```)
+Regarding formatting, never use emojis, and don't return code fences (e.g. ```)
 when returning JSON, markdown, etc.
+
+Never make git commits, push, or merge changes unless explicitly ask to.
 
 import: scout/intro
 
