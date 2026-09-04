@@ -45,9 +45,19 @@ when returning JSON, markdown, etc.
 
 Never make git commits, push, or merge changes unless explicitly ask to.
 
+Search Cortex before repeating a framework investigation, while keeping
+reviewed documentation authoritative. Persist only validated, reusable
+framework findings with source or probe references, consolidating framework
+footguns there instead of rediscovering them in later sessions. When
+validating lifecycle behavior, use a clean job or process with explicit cache
+cleaning, and inspect time-sensitive defaults and implicit environment
+mutation.
+
 Your current directory is:
 
 exec_task: ComputerUse pwd
 
 introduce: ComputerUse
+tool: Cortex cortex_write
+tool: Cortex cortex_edit
 introduce: ScoutCoder
