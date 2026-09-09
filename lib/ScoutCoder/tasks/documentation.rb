@@ -1,8 +1,18 @@
 module ScoutCoder
   REPOS=['scout-gear', 'scout-essentials', 'scout-camp', 'scout-ai', 'scout-rig']
 
+
   helper :repo_dir do |repo|
-    Path.setup File.join(ENV['HOME'], 'git', repo)
+    repo_path_map = repo.sub("-", '_') + "_lib"
+
+    if Scout.root.find(repo_path_map).exists?
+      Scout.root.find(repo_path_map)
+    elsif Path.setup(File.join(ENV['HOME'], 'git', repo)).exists?
+      Path.setup File.join(ENV['HOME'], 'git', repo)
+    else
+      gem = Gem::Specification.find_by_name(repo)
+      Path.setup gem.full_gem_path
+    end
   end
 
   # ScoutCoder: workflow `libdir` points at `<workflow root>/lib` for standard
