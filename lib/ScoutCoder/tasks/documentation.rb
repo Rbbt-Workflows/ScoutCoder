@@ -10,8 +10,12 @@ module ScoutCoder
     elsif Path.setup(File.join(ENV['HOME'], 'git', repo)).exists?
       Path.setup File.join(ENV['HOME'], 'git', repo)
     else
-      gem = Gem::Specification.find_by_name(repo)
-      Path.setup gem.full_gem_path
+      begin
+        gem = Gem::Specification.find_by_name(repo)
+        Path.setup gem.full_gem_path
+      rescue
+        nil
+      end
     end
   end
 
@@ -24,7 +28,7 @@ module ScoutCoder
   # the checkout root (single-file / non-standard workflow) it is used as is.
   helper :doc_root do |name|
     dir = repo_dir(name)
-    return dir if dir.exists?
+    return dir if dir && dir.exists?
 
     begin
       wf = Misc.with_env('SCOUT_WORKFLOW_AUTOINSTALL', 'false'){ Workflow.require_workflow name }
