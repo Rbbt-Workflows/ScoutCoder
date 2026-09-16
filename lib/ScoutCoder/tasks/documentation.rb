@@ -1,5 +1,5 @@
 module ScoutCoder
-  REPOS=['scout-gear', 'scout-essentials', 'scout-camp', 'scout-ai', 'scout-rig']
+  REPOS=['scout-essentials', 'scout-gear', 'scout-camp', 'scout-rig', 'scout-ai']
 
 
   helper :repo_dir do |repo|
@@ -138,7 +138,7 @@ with no extra commentary.
 # Repo #{repo}
       EOF
       agent.file repo_dir(repo)['README.md'] if repo_dir(repo)['README.md'].exists?
-      repo_dir(repo).glob('doc*/**/*.md').each do |file|
+      repo_dir(repo).glob('doc/**/*.md').each do |file|
         agent.file file
       end
     end
