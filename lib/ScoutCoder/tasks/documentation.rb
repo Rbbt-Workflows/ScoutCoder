@@ -11,10 +11,15 @@ module ScoutCoder
       Path.setup File.join(ENV['HOME'], 'git', repo)
     else
       begin
-        gem = Gem::Specification.find_by_name(repo)
-        Path.setup gem.full_gem_path
+        workflow = Workflow.require_workflow repo
+        workflow.libdir
       rescue
-        nil
+        begin
+          gem = Gem::Specification.find_by_name(repo)
+          Path.setup gem.full_gem_path
+        rescue
+          nil
+        end
       end
     end
   end
