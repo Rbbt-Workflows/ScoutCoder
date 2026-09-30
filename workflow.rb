@@ -28,8 +28,6 @@ module ScoutCoder
 end
 
 require 'ScoutCoder/tasks/documentation.rb'
-require 'ScoutCoder/tasks/explore.rb'
-require 'ScoutCoder/tasks/develop.rb'
 
 ScoutCoder.include_workflow ComputerUse
 

@@ -1,3 +1,5 @@
+Documentation to help coding agents writing Scout code
+
 ScoutCoder is an AI-assisted Scout workflow for retrieving framework documentation, exploring project files, and coordinating multi-agent development work over a local codebase. The documentation lookup also covers any installed Scout workflow, since workflows can carry their own README.md, doc*/ and research/ folders in the same format as Scout repositories.
 
 The workflow combines three complementary capabilities. First, it exposes documentation lookup tasks for the Scout ecosystem, backed by local clones of the `scout-gear`, `scout-essentials`, `scout-camp`, `scout-ai`, and `scout-rig` repositories under `~/git`. Second, it provides project-understanding tasks that can summarize files, explain code, and generate a navigable description of a directory. Third, it contains agentic planning and implementation tasks that turn a natural-language request into a plan and then into delegated work across specialized prompts.
@@ -69,6 +71,9 @@ Open.consume_stream io
 
 ```
 
+## Testing
+
+
 # Tasks
 
 ## help_list_repos
@@ -120,41 +125,6 @@ List the workflows installed and available to ScoutCoder
 This task unions `Workflow.installed_workflows`, a purely local scan of the `workflows` pathmap that never triggers network autoinstall, with the workflow modules already loaded in the current process. The combined list is deduplicated and sorted.
 
 It is the discovery step for workflow names: any name it returns is usable as the `repo` input of `help_list_repo_documents` and `help_get_repo_document`, which then read the workflow's own `README.md`, `doc*/`, and `research/` documentation.
-
-## summarize_file
-Summarize one file
-
-This is the lightest-weight repository understanding task. It validates that the given `file` exists and is not a directory, attaches it to a fresh agent, and asks for a summary.
-
-Use `summarize_file` when a file is probably relevant but you do not yet want a line-by-line explanation. It is especially useful before deciding whether to read the full file or to include it in a broader `explain_code` request.
-
-## explain_code
-Read one or more files and explain the code they contain
-
-The `files` input is a path array. Each file is validated before being attached to the agent, and the agent is asked to explain the code and to consult Scout documentation when that helps interpret framework-specific constructs.
-
-This task is best used for related source files that make more sense together than in isolation, for example a workflow file plus one or more task files. Compared with `summarize_file`, the goal here is understanding structure, responsibilities, and implementation details rather than producing a brief synopsis.
-
-## explore_directory_structure
-Explore a directory and return a markdown guide to its contents
-
-This task is designed for first-contact exploration of a repository or analysis directory. The agent is instructed to use inherited tools such as `list_directory`, `read`, `file_stats`, `summarize_file`, and `explain_code` to inspect the tree efficiently and to avoid loading more context than necessary.
-
-The implementation seeds the agent with a recursive directory listing including stats, asks it to plan a concise guide for other agents, and then asks for a final markdown document. The task also saves the underlying chat transcript to the step files area, which can be helpful when reviewing how the report was produced.
-
-## plan
-Produce a structured implementation plan for a prompt
-
-The `prompt` input is a free-text request describing something to build or change. The task creates an agent, asks it to act specifically as a planner, and requests a three-part answer with `Overview`, `Approach`, and `Steps`.
-
-This task is useful when a request is still ambiguous or large enough that it should be decomposed before any coding starts. The `Approach` section is meant to connect the request with the actual project structure, while the `Steps` section is intended to be actionable enough for delegated implementation work.
-
-## implement
-Coordinate agent-assisted implementation of a prompt
-
-This task depends on `plan`, so it first obtains a structured plan for the same request. It then assembles a small agent hierarchy: a developer agent with workflow tools and the developer prompt, a supervisor agent that delegates to the developer, and a top-level agent that delegates to the supervisor.
-
-The planned steps are passed to the top-level agent together with instructions to use `./doc/` for any supporting documentation files that help downstream agents complete the work. Conceptually, `implement` is the highest-level task in the workflow: rather than answering a question directly, it orchestrates a multi-agent execution strategy around a previously generated plan.
 
 ## current_time
 Return the current system time as plain text
