@@ -1,6 +1,7 @@
 require 'scout'
 require 'scout-ai'
 
+
 Misc.add_libdir if __FILE__ == $PROGRAM_NAME
 
 #require 'rbbt/sources/ScoutCoder'
@@ -10,7 +11,13 @@ module ScoutCoder
 
 end
 
-require 'ScoutCoder/tasks/documentation.rb'
+
+require 'ScoutCoder/tasks/documentation'
+require 'ScoutCoder/tasks/workflow_tools'
+
+Scout.share.find(:current).tasks.glob('*.rb').each do |file|
+  load file
+end
 
 #ScoutCoder.all_exports.clear
 #ScoutCoder.synchronous_exports.clear

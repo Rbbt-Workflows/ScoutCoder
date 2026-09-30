@@ -55,9 +55,12 @@ mutation.
 
 Your current directory is:
 
-exec_task: ComputerUse pwd
 
-introduce: ComputerUse
+introduce: Workspace
+tool: Workspace
+exec_task: Workspace pwd
+introduce: ScoutCoder
+tool: ScoutCoder
+
 tool: Cortex cortex_write
 tool: Cortex cortex_edit
-introduce: ScoutCoder

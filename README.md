@@ -73,8 +73,104 @@ Open.consume_stream io
 
 ## Testing
 
+When developing a Scout workflow, use ScoutCoder's workflow-development
+tools to discover tasks, inspect their inputs, run a task, and inspect or
+monitor the resulting job. If a workflow needs a new task, `define_task` can
+create its source file in ScoutCoder's task directory. `run_task` executes
+synchronously; `job_info` and `job_status` inspect an addressed job without
+running the task again. The following tools describe and operate on tasks in
+the named workflow.
 
 # Tasks
+
+## list_tasks
+List tasks declared by a workflow
+
+Inputs: `workflow` (required string). Returns the sorted tasks with each
+task's name, description, result type, and directly declared inputs. This is
+the discovery step; dependencies are not included in this listing. Use
+`task_inputs` to inspect inputs propagated from dependencies as well.
+
+## task_inputs
+Inspect direct and recursive inputs for one workflow task
+
+Inputs: `workflow` and `task` (required strings). Returns the task description
+and result type, plus `direct_inputs` and `recursive_inputs`. Each input entry
+includes its name, type, description, default, and whether it is required.
+This inspection does not execute the task.
+
+## run_task
+Run a workflow task synchronously
+
+Inputs: `workflow` and `task` (required strings), `inputs` (JSON object as
+text, default `{}`), and `clean` (boolean, default `false`). It runs the task
+with the supplied inputs and returns compact JSON with the status, output, job
+path and short path, whether the result was replayed from cache, and any
+captured error. Set `clean: true` to clean the addressed job before running.
+
+For example, inspect and then run a task with its inputs:
+
+```ruby
+ScoutCoder.job(:task_inputs, nil,
+  workflow: 'ComputerUse',
+  task: 'read'
+).run
+
+ScoutCoder.job(:run_task,
+  workflow: 'ComputerUse',
+  task: 'read',
+  inputs: '{"path":"README.md"}'
+).run
+```
+
+`run_task` is the execution tool; use `job_info` or `job_status` when you
+already have the workflow, task, and inputs for an existing job and only need
+to inspect it.
+
+## job_info
+Inspect the recorded information for a workflow job
+
+Inputs: `workflow` and `task` (required strings), and `inputs` (JSON object as
+text, default `{}`). Resolves the job from those values and reports its job path and short path,
+status, timestamps, messages, and exception metadata when available. It does not run the task.
+
+## job_status
+Inspect the current status of a workflow job
+
+Inputs: `workflow` and `task` (required strings), and `inputs` (JSON object as
+text, default `{}`). Resolves the job from those values and reports its
+status, whether it is running, timestamps, and exception metadata when
+available. It does not run the task.
+
+## define_task
+Create a new ScoutCoder task source file
+
+Inputs: `task_name` (required string) and `definition` (required Ruby source
+text containing the matching task declaration). The task name must match
+`[a-z][a-z0-9_]*`. The definition is wrapped in `module ScoutCoder ... end`
+and created as `<task_name>.rb` in `share/tasks`; existing files and symlinks
+are not overwritten. When `RubyVM::InstructionSequence` is available, the
+source is checked for Ruby syntax. This check does not execute the code,
+validate the task DSL, or smoke-test the task. The result reports the file
+path, byte count, whether syntax validation was available, and
+`overwritten: false`. The workflow loader discovers task files when the
+workflow is loaded, so load the workflow again before expecting a newly
+created task to be available.
+
+Example definition text:
+
+```ruby
+definition = <<~'RUBY'
+  task :greet, :string do |name|
+    "Hello, #{name}!"
+  end
+RUBY
+
+ScoutCoder.job(:define_task,
+  task_name: 'greet',
+  definition: definition
+).run
+```
 
 ## help_list_repos
 List the Scout documentation repositories known to ScoutCoder
