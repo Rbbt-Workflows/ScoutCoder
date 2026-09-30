@@ -5,31 +5,12 @@ Misc.add_libdir if __FILE__ == $PROGRAM_NAME
 
 #require 'rbbt/sources/ScoutCoder'
 
-Workflow.require_workflow "ComputerUse"
-
 module ScoutCoder
   extend Workflow
 
-  def self.prompts
-    Scout.share.prompts
-  end
-
-  @endpoints = Scout.etc.AI.glob_names("*")
-  self.singleton_class.attr_accessor :endpoints
-
-  helper :agent do |name="ScoutCoder",options={}|
-    if name
-      LLM::Agent.load_agent name, **options
-    else
-      options = IndiferentHash.add_defaults options, start_chat: Chat.setup(LLM.chat(Scout.start_chat.find))
-      LLM.agent **options
-    end
-  end
 end
 
 require 'ScoutCoder/tasks/documentation.rb'
-
-ScoutCoder.include_workflow ComputerUse
 
 #ScoutCoder.all_exports.clear
 #ScoutCoder.synchronous_exports.clear
