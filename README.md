@@ -73,15 +73,128 @@ Open.consume_stream io
 
 ## Testing
 
+ScoutCoder-authored task tests can be created with `author_task_test` and run
+with `run_task_test`. For a task authored at `share/tasks/<task_name>.rb`, the
+paired test is stored at `share/test/task/<task_name>.rb`. Authoring requires
+an existing task source under `share/tasks`, validates the name and Ruby
+syntax, and refuses to overwrite an existing test. The runner starts a fresh
+Ruby process, loads the current `workflow.rb` (including the task files it
+discovers), runs that test, and returns its exit status and captured output.
+It has a configurable positive timeout (default 120 seconds). Tests that
+execute Scout jobs should clean the addressed jobs themselves when freshness
+matters; a fresh Ruby process does not imply an empty persistent Scout job
+cache. Test source is trusted Ruby code and is not OS-sandboxed by this runner.
+
+For example, run one existing authored test from Ruby with:
+
+```ruby
+ScoutCoder.job(:run_task_test, nil, task_name: 'my_task').run
+```
+
+To create a test first, pass its Ruby source to `author_task_test`:
+
+```ruby
+ScoutCoder.job(:author_task_test, nil,
+  task_name: 'my_task',
+  test_source: "require 'test/unit'\nclass MyTaskTest < Test::Unit::TestCase\n  def test_example; assert_equal 2, 1 + 1; end\nend\n"
+).run
+```
+
+These helpers address task source at `share/tasks/<task_name>.rb` and test
+source at `share/test/task/<task_name>.rb` in this checkout.
+
 When developing a Scout workflow, use ScoutCoder's workflow-development
-tools to discover tasks, inspect their inputs, run a task, and inspect or
-monitor the resulting job. If a workflow needs a new task, `define_task` can
-create its source file in ScoutCoder's task directory. `run_task` executes
-synchronously; `job_info` and `job_status` inspect an addressed job without
-running the task again. The following tools describe and operate on tasks in
-the named workflow.
+tools to discover tasks, inspect their inputs, source and declared
+dependencies, run a task, and inspect or monitor the resulting job. The
+normal authoring loop is `define_task` to create
+`share/tasks/<task_name>.rb`, `author_task_test` to add its paired test, and
+`run_task_test` to execute that test in a fresh Ruby process; `run_task` is
+kept for debugging a task interactively once the loop is green.
+`define_task` validates the declaration and Ruby syntax but does not load the
+candidate, confirm task registration, or smoke-test it; the paired-test run
+is the load check. `run_task` executes synchronously and reports whether it
+replayed a cached result; clean (or otherwise establish freshness) when
+validating recent code changes. `job_info` and `job_status` inspect an
+addressed job without running the task again. The following tools describe
+and operate on tasks in the named workflow.
 
 # Tasks
+
+## task_code
+Inspect a task's source location and source-file text
+
+Inputs: `workflow` and `task`. Returns the source path, definition line, and
+entire source file when the task's runtime source location identifies a
+readable file. The returned text is the whole file, not an extracted task
+body. Unavailable source is reported with a reason.
+
+## task_dependencies
+Inspect declared static dependencies and dynamic dependency blocks
+
+Inputs: `workflow` and `task`. Reports static dependency declarations
+separately from dynamic dependency blocks. A dynamic block's presence does
+not enumerate the complete dependency list; the output explicitly marks the
+list as incomplete when applicable.
+
+## define_task
+Create a new ScoutCoder task source file
+
+Inputs: `task_name` and `definition` (both required) plus optional
+`export_type`. The task name must match `[a-z][a-z0-9_]*`; the Ruby source
+must declare the matching task. The source is wrapped in `module ScoutCoder`,
+syntax-checked, and created as `share/tasks/<task_name>.rb` without
+overwriting an existing file. `export_type` accepts `export` or `export_exec`
+(the default, so the task appears as an agent tool), or `none` to omit the
+export declaration entirely. Invalid values are rejected.
+
+Candidate code is not loaded or smoke-tested by this operation, so task
+registration is not validated until the workflow is reloaded and the new task
+is discovered. The result distinguishes syntax validation from load,
+registration, and inspection, which are not performed by `define_task`.
+After the file is created, `author_task_test` can add a paired test and
+`run_task_test` executes it in a fresh Ruby process that loads the current
+`workflow.rb`, which is how the new task is first exercised.
+
+Example definition text:
+
+```ruby
+definition = <<~'RUBY'
+  task :greet, :string do |name|
+    "Hello, #{name}!"
+  end
+RUBY
+
+ScoutCoder.job(:define_task,
+  task_name: 'greet',
+  definition: definition
+).run
+```
+
+
+## author_task_test
+Create a test for an existing ScoutCoder-authored task
+
+Inputs: `task_name` and `test_source`. The paired test is written following
+the task's source location: `share/test/task/<task_name>.rb` for tasks
+authored under `share/tasks`, or `test/ScoutCoder/tasks/test_<file>.rb` for
+tasks in `lib/ScoutCoder/tasks`. The task name must match
+`[a-z][a-z0-9_]*`, and the corresponding task source must exist. The source
+is Ruby syntax-checked before writing; an existing test file is never
+overwritten. The test is not run during creation. Use `run_task_test` to
+execute it. Test source is trusted code and is not OS-sandboxed.
+
+## run_task_test
+Run an authored task test in a fresh Ruby process
+
+Inputs: `task_name` and positive `timeout_seconds` (default 120). Loads the
+current `workflow.rb` (including every authored task file), then executes the
+paired test — `share/test/task/<task_name>.rb` for tasks under `share/tasks`,
+or `test/ScoutCoder/tasks/test_<file>.rb` for tasks in `lib/ScoutCoder/tasks`
+— with `lib/` on the Ruby load path. Returns pass/fail, exit status, standard
+output and standard error, timeout status, and the invocation details. A fresh
+Ruby process loads current source and task discovery, but does not clear
+persistent Scout job caches; tests should explicitly clean jobs where
+freshness matters.
 
 ## list_tasks
 List tasks declared by a workflow
@@ -142,36 +255,6 @@ text, default `{}`). Resolves the job from those values and reports its
 status, whether it is running, timestamps, and exception metadata when
 available. It does not run the task.
 
-## define_task
-Create a new ScoutCoder task source file
-
-Inputs: `task_name` (required string) and `definition` (required Ruby source
-text containing the matching task declaration). The task name must match
-`[a-z][a-z0-9_]*`. The definition is wrapped in `module ScoutCoder ... end`
-and created as `<task_name>.rb` in `share/tasks`; existing files and symlinks
-are not overwritten. When `RubyVM::InstructionSequence` is available, the
-source is checked for Ruby syntax. This check does not execute the code,
-validate the task DSL, or smoke-test the task. The result reports the file
-path, byte count, whether syntax validation was available, and
-`overwritten: false`. The workflow loader discovers task files when the
-workflow is loaded, so load the workflow again before expecting a newly
-created task to be available.
-
-Example definition text:
-
-```ruby
-definition = <<~'RUBY'
-  task :greet, :string do |name|
-    "Hello, #{name}!"
-  end
-RUBY
-
-ScoutCoder.job(:define_task,
-  task_name: 'greet',
-  definition: definition
-).run
-```
-
 ## help_list_repos
 List the Scout documentation repositories known to ScoutCoder
 
@@ -221,171 +304,3 @@ List the workflows installed and available to ScoutCoder
 This task unions `Workflow.installed_workflows`, a purely local scan of the `workflows` pathmap that never triggers network autoinstall, with the workflow modules already loaded in the current process. The combined list is deduplicated and sorted.
 
 It is the discovery step for workflow names: any name it returns is usable as the `repo` input of `help_list_repo_documents` and `help_get_repo_document`, which then read the workflow's own `README.md`, `doc*/`, and `research/` documentation.
-
-## current_time
-Return the current system time as plain text
-
-This small utility task is mainly useful for sanity checks, timestamp comparisons, or lightweight tool testing. It has no inputs and returns the current time as a string.
-
-Because it is simple and side-effect free, it is often used to verify that a tool call path is working before invoking more substantial tasks.
-
-## pwd
-Return the current working directory
-
-This task reports the working directory that defines the safe root for filesystem-oriented tasks inherited from `ComputerUse`. In ScoutCoder, tasks such as `read`, `write`, `delete`, `search`, and `list_directory` are constrained to operate under this directory.
-
-Agents should often call `pwd` early when they need to reason about relative paths or confirm the sandbox root they are allowed to modify.
-
-## list_directory
-List files and directories under a path
-
-The required `directory` input selects the subtree to inspect. The optional `recursive` and `stats` inputs control whether the listing descends into subdirectories and whether file metadata is included.
-
-This is the primary discovery task for repository exploration. Use it before reading files so that an agent has a map of the project and can decide which paths are likely to matter.
-
-## file_stats
-Return basic metadata for one file
-
-The `file` input identifies a path under the allowed root, and the task returns basic information such as file type, size, line count, and modification time. It is especially useful for deciding whether a file is small enough to read directly or should be summarized first.
-
-When exploring unfamiliar repositories, `file_stats` helps agents control context size and choose the right follow-up task.
-
-## read
-Read all or part of a file
-
-This task reads a file and returns text from either the head or the tail. The `limit`, `file_end`, and `start` inputs make it possible to inspect large files incrementally instead of loading them whole.
-
-For agentic workflows this is usually the safest primitive for direct content access. It works well together with `file_stats`, `search`, and `summarize_file`.
-
-## search
-Search plain-text files for a query string
-
-The `path` input selects the directory to search, `query` is the literal string to match, and `max_results` can be used to bound the number of returned paths. The task searches file contents rather than filenames and skips binary files.
-
-This is a good way to find definitions, prompt fragments, or configuration values before reading any specific file. It is particularly effective for locating task names, helper methods, or references to workflow-specific concepts.
-
-## write
-Write a text file under the working directory
-
-The task takes a relative `file` path and a `content` string, validates that the target remains under the workflow root, and writes the file. Existing files can be overwritten.
-
-Use `write` for creating new files or replacing complete file contents. For small edits to existing files, `patch` is usually the better fit because it preserves surrounding content and makes intent clearer.
-
-## delete
-Delete a file or directory under the working directory
-
-The `file` input identifies the target path. If the path is a directory, deletion is recursive; the same path safety checks used by the other filesystem tasks are applied here as well.
-
-This task is the correct way to remove files or directories. Do not try to delete files through `patch`, which is intended only for updates to existing file contents.
-
-## patch
-Apply a patch to an existing file
-
-This task accepts unified diffs and ChatGPT-style patch blocks, normalizes them, tries to detect the appropriate strip level, and applies the patch from the repository root. It is designed for AI agents that need to update existing files while keeping the change localized and inspectable.
-
-Use `patch` only for modifications to files that already exist. If the goal is to add a file, prefer `write`; if the goal is to remove one, prefer `delete`. The `dry_run` option is especially useful when an agent is iterating on a patch and wants diagnostics before changing the repository.
-
-## bash
-Run a bash command in the project sandbox
-
-The required `cmd` input is a shell command string. The task executes it in the sandboxed environment when available and returns a JSON object containing standard output, standard error, and exit status.
-
-This is the broadest execution primitive and is useful for ad hoc inspection, command-line tooling, and quick repository checks. For language-specific snippets, the dedicated `ruby`, `python`, and `r` tasks are often more convenient.
-
-## ruby
-Run Ruby code or a Ruby file
-
-You can provide inline Ruby with the `code` input or point at a script file with the `file` input. The task returns a JSON object with standard output, standard error, and exit status.
-
-This is the natural execution task when exploring or testing Scout workflows, because it lets an agent load `workflow.rb`, instantiate jobs, or inspect task metadata directly from Ruby.
-
-## python
-Run Python code or a Python file
-
-This task mirrors `ruby` but for Python. It accepts inline code or a script path and returns execution results as JSON.
-
-It is useful for lightweight data processing, format conversion, or validation steps when Python is the easiest tool for the job.
-
-## r
-Run R code or an R script
-
-This task executes inline R or an R file and returns the standard output, standard error, and exit status. It is mainly intended for repositories that include analysis components or tasks that are easier to express in R.
-
-In mixed-code projects, this gives agents a direct way to validate or inspect R-based assets without leaving the workflow environment.
-
-## playwright
-Run Playwright tests against a URL
-
-The task accepts inline Playwright test code or a path to an existing Playwright test file, runs it with `npx playwright test`, and stores run artifacts under `.playwright/`. Optional inputs control headless execution, tracing, video, timeout, and extra command-line arguments.
-
-This is the preferred task for browser-level validation of web applications. It is particularly useful after code changes when an agent wants a repeatable UI check rather than a manual inspection.
-
-## html2md
-Convert HTML or an HTML URL to markdown
-
-The required `html` input can contain raw HTML or a remote URL. The task converts the result to markdown using `html2markdown`, fetching the content first when a URL is supplied.
-
-This task is useful when web pages or generated HTML documents need to be fed into text-oriented tools such as summarizers, search steps, or RAG pipelines.
-
-## html_query
-Query HTML content through the excerpt and RAG pipeline
-
-This task is a convenience wrapper that uses `html2md` as the text source before chunking and querying. In practice it lets an agent search HTML-derived content without manually invoking the intermediate conversion and indexing tasks.
-
-Use it when the starting point is a web page or HTML snippet and the goal is to retrieve the most relevant passages for a question.
-
-## pdf2md_full
-Convert a PDF to markdown with images preserved in the markdown output
-
-The `pdf` input points to a PDF file, which is processed with `docling`. The generated markdown is written to the task area and becomes the primary result for the step.
-
-This is the most faithful PDF conversion task in the workflow. Use it when image placeholders or the full markdown structure are useful for later processing.
-
-## pdf2md_no_images
-Convert a PDF to markdown and drop image placeholder lines
-
-This task depends on `pdf2md_full` and then removes lines that begin with the image placeholder marker. The result is usually cleaner when the PDF is being processed for text understanding rather than layout reconstruction.
-
-It is a better default than `pdf2md_full` for most language-model workflows, because it strips a common source of noise while preserving the text content.
-
-## pdf2md
-Alias to the image-stripped PDF-to-markdown conversion
-
-This is the convenient public name for the cleaner PDF conversion path. In most cases agents should call `pdf2md` instead of deciding between the underlying PDF conversion variants themselves.
-
-Use `pdf2md_full` only when the full conversion output, including image markers, is specifically needed.
-
-## excerpts
-Split markdown text into excerpts
-
-This task takes markdown text and breaks it into chunks according to the selected strategy, such as paragraphs, sentences, or sliding windows. The chunking parameters let an agent trade off locality and context size.
-
-It is the preprocessing step behind the workflow's simple RAG pipeline. Use it when long documents need to be searched semantically rather than read sequentially.
-
-## rag
-Build a retrieval index from excerpts
-
-After excerpts have been produced, this task embeds them with the chosen embedding model and saves an `LLM::RAG` index. The result is a compact retrieval structure that can later be queried for relevant passages.
-
-This is useful when a document or collection is large enough that repeated semantic lookup is more efficient than repeated full-text reading.
-
-## query
-Search a RAG index for the best matching passages
-
-The required `prompt` input is the text to match, and `num` controls how many excerpts are returned. The task produces a JSON array of the best-scoring excerpt texts.
-
-Together with `excerpts` and `rag`, this provides a lightweight semantic retrieval stack inside the workflow.
-
-## pdf_query
-Query PDF content through the PDF conversion and RAG pipeline
-
-This task is a convenience wrapper for the common case where the source material is a PDF and the desired output is a short list of relevant passages. It saves the caller from manually chaining PDF conversion, chunking, indexing, and retrieval.
-
-Use it when you need answer-oriented access to a PDF rather than a full markdown conversion.
-
-## searxng
-Run a web search through a configured SearXNG instance
-
-The `query` input supplies the search string, while optional inputs allow control over result count, language, categories, engines, safe-search, time range, and endpoint path. The task relies on a configured SearXNG endpoint and returns structured search results as JSON.
-
-This is ScoutCoder's outward-facing web lookup task. It is useful when the needed information is not in the local repository or in the local Scout documentation set and an agent needs a controlled way to search the web.

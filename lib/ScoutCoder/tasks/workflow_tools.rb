@@ -1,6 +1,35 @@
 require 'json'
+require 'ripper'
 
 module ScoutCoder
+  # Keep export choice resolution and emitted DSL source directly testable
+  # without invoking define_task's filesystem-writing behavior.
+  module TaskDefinition
+    module_function
+
+    # Resolve the export declaration for a generated task. `export_mode` is a
+    # deprecated compatibility alias: it applies only when export_type is
+    # omitted and must agree with export_type when both are supplied.
+    def resolve_export_type(export_type, export_mode = nil)
+      export_type = export_mode if export_type.nil?
+      export_type = export_type.to_s unless export_type.nil?
+      return nil if export_type.nil?
+      unless %w[export export_exec].include?(export_type)
+        raise ParameterException, "define_task validation failed [export_type]: expected 'export', 'export_exec' or omission, got #{export_type.inspect}"
+      end
+      if export_mode && export_type != export_mode.to_s
+        raise ParameterException, "define_task validation failed [export_type]: export_type #{export_type.inspect} conflicts with export_mode #{export_mode.to_s.inspect}"
+      end
+      export_type
+    end
+
+    def source(name, definition, export_type)
+      source = "module ScoutCoder\n\n#{definition.rstrip}\n"
+      source += "\n#{export_type} :#{name}\n" if export_type
+      source + "\nend\n"
+    end
+  end
+
   # Small task-inspection and execution surface for workflows available to Scout.
   # Keep this independent of WorkflowCoder: ScoutCoder jobs are resolved through
   # Workflow.require_workflow and run using the workflow's normal Step API.
@@ -29,12 +58,45 @@ module ScoutCoder
       default: default, required: !!(options && options[:required]) }
   end
 
+  helper :task_source_location do |callable|
+    location = callable.source_location if callable.respond_to?(:source_location)
+    if location && location.length >= 2
+      { path: location[0].to_s, line: location[1] }
+    else
+      { path: nil, line: nil }
+    end
+  end
+
+  helper :task_dependency_metadata do |definition|
+    if definition.respond_to?(:deps)
+      (definition.deps || []).map do |workflow, task_name, options, block, _original_args|
+        if block
+          { kind: 'dynamic', static: false, source: task_source_location(block) }
+        else
+          { kind: 'static', static: true,
+            workflow: (workflow.name.to_s if workflow && workflow.respond_to?(:name)),
+            task: (task_name.to_s if task_name), options: options || {} }
+        end
+      end
+    else
+      []
+    end
+  end
+
   input :workflow, :string, 'Workflow name to inspect'
   task :list_tasks => :json do |workflow|
     wf = managed_workflow(workflow)
-    wf.tasks.sort_by { |name, _task| name.to_s }.map do |name, task|
-      { name: name.to_s, description: task.description.to_s, type: task.type.to_s,
-        inputs: (task.inputs || []).map { |input| describe_task_input(input) } }
+    wf.tasks.sort_by { |name, _task| name.to_s }.map do |name, definition|
+      dependencies = task_dependency_metadata(definition)
+      { name: name.to_s, description: definition.description.to_s,
+        type: definition.type.to_s,
+        inputs: (definition.inputs || []).map { |input| describe_task_input(input) },
+        source: task_source_location(definition),
+        dependencies: {
+          static_declarations: dependencies.select { |dependency| dependency[:static] },
+          dynamic_block_present: dependencies.any? { |dependency| dependency[:kind] == 'dynamic' },
+          supported: definition.respond_to?(:deps)
+        } }
     end
   end
 
@@ -46,6 +108,41 @@ module ScoutCoder
       result_type: definition.type.to_s,
       direct_inputs: (definition.inputs || []).map { |input| describe_task_input(input) },
       recursive_inputs: (definition.recursive_inputs || []).map { |input| describe_task_input(input) } }
+  end
+
+  input :workflow, :string, 'Workflow name'
+  input :task, :string, 'Task name'
+  task :task_code => :json do |workflow, task|
+    wf, definition = managed_task(workflow, task)
+    source = task_source_location(definition)
+    path = source[:path]
+    content = nil
+    unavailable_reason = nil
+    if path && File.file?(path)
+      begin
+        content = File.read(path)
+      rescue StandardError => error
+        unavailable_reason = "source file could not be read: #{error.message}"
+      end
+    else
+      unavailable_reason = 'source file location is unavailable or does not identify a file'
+    end
+    { workflow: wf.to_s, task: task.to_s, source_path: path,
+      definition_line: source[:line], text_scope: (content ? 'entire_file' : nil),
+      source_text: content, unavailable_reason: unavailable_reason }
+  end
+
+  input :workflow, :string, 'Workflow name'
+  input :task, :string, 'Task name'
+  task :task_dependencies => :json do |workflow, task|
+    wf, definition = managed_task(workflow, task)
+    dependencies = task_dependency_metadata(definition)
+    dynamic = dependencies.select { |dependency| dependency[:kind] == 'dynamic' }
+    { workflow: wf.to_s, task: task.to_s,
+      static_declarations: dependencies.select { |dependency| dependency[:static] },
+      dynamic_dependency_block_present: !dynamic.empty?, dynamic_blocks: dynamic,
+      dynamic_list_is_complete: false,
+      unsupported: !definition.respond_to?(:deps) }
   end
 
   input :workflow, :string, 'Workflow name'
@@ -69,11 +166,11 @@ module ScoutCoder
       result[:output] = step.run
       info = step.info rescue {}
       result[:status] = (info[:status] || (step.done? ? 'done' : 'unknown')).to_s
-    rescue Exception => error
+    rescue StandardError => error
       result[:error] = { class: error.class.name, message: error.message }
       begin
         result[:status] = step.info[:status].to_s if step && step.info[:status]
-      rescue Exception
+      rescue StandardError
       end
     end
     result
@@ -111,42 +208,92 @@ module ScoutCoder
 
   # Create new authored task definitions under share/tasks. Keep this trusted
   # code interface with the tooling, not alongside the files it creates.
-  input :task_name, :string, 'New task identifier (lowercase letters, digits and underscores; starts with a letter)'
-  input :definition, :text, 'Ruby task DSL source: desc/input declarations and a task declaration matching task_name'
-  task :define_task => :json do |task_name, definition|
+  desc "Create a new ScoutCoder task source file
+
+Inputs: `task_name`, `definition` (both required) and optional `export_type`.
+The task name must match `[a-z][a-z0-9_]*`; the Ruby source must declare the
+matching task. The source is wrapped in `module ScoutCoder`, syntax-checked,
+and created as `share/tasks/<task_name>.rb` without overwriting an existing
+file. `export_type` accepts `export` (default), `export_exec`, or `none` to
+omit the export declaration.
+
+The candidate is not loaded or registered by this operation; `author_task_test`
+plus `run_task_test` provide the fresh-process load check, and `run_task` is
+for interactive debugging once the loop is green."
+  input :task_name, :string, 'New task identifier (lowercase letters, digits and underscores; starts with a letter)', nil, required: true
+  input :definition, :text, 'Ruby task DSL source: desc/input declarations and a task declaration matching task_name', nil, required: true
+  input :export_type, :string, 'Optionally export the generated task with export or export_exec (none to omit)', 'export'
+  task :define_task => :json do |task_name, definition, export_type|
     name = task_name.to_s
     unless name.match?(/\A[a-z][a-z0-9_]*\z/)
-      raise ParameterException, "Invalid task name '#{name}'; expected [a-z][a-z0-9_]*"
+      raise ParameterException, "define_task validation failed [task_name]: invalid task name '#{name}'; expected [a-z][a-z0-9_]*"
+    end
+    export_type = nil if export_type == 'none'
+    unless export_type.nil? || %w[export export_exec].include?(export_type)
+      raise ParameterException, "define_task validation failed [export_type]: expected 'export', 'export_exec' or 'none', got #{export_type.inspect}"
     end
     unless definition.is_a?(String) && !definition.strip.empty?
-      raise ParameterException, 'definition must be non-empty Ruby source'
+      raise ParameterException, 'define_task validation failed [source]: definition must be non-empty Ruby source'
     end
 
-    task_dir = File.realpath(File.expand_path('../../../share/tasks', __dir__))
+    task_dir = begin
+      File.realpath(File.expand_path('../../../share/tasks', __dir__))
+    rescue SystemCallError => error
+      raise ParameterException, "define_task validation failed [task_directory]: cannot resolve share/tasks: #{error.message}"
+    end
     target = File.expand_path("#{name}.rb", task_dir)
     unless File.dirname(target) == task_dir && File.basename(target) == "#{name}.rb"
-      raise ParameterException, 'Task path must remain directly within share/tasks'
+      raise ParameterException, 'define_task validation failed [path]: task file must remain directly within share/tasks'
     end
     if File.exist?(target) || File.symlink?(target)
-      raise ParameterException, "Task file already exists: #{target}; refusing to overwrite"
+      raise ParameterException, "define_task validation failed [no_overwrite]: task file already exists: #{target}; refusing to overwrite"
     end
 
-    declaration = /^\s*task\s+[:']?#{Regexp.escape(name)}(?:\s|=>|$)/
-    unless definition.match?(declaration)
-      raise ParameterException, "definition must declare task :#{name}"
+    # Inspect Ruby tokens rather than matching raw text, so comments and string
+    # literals cannot masquerade as a task declaration.
+    tokens = Ripper.lex(definition).reject do |_position, type, _text, _state|
+      %i[on_sp on_ignored_nl on_nl on_comment].include?(type)
+    end
+    declared = tokens.each_with_index.any? do |(_position, type, text, _state), index|
+      next false unless type == :on_ident && text == 'task'
+      previous = tokens[index - 1]
+      next false if previous && %i[on_period on_op].include?(previous[1]) && %w[. &.].include?(previous[2])
+      symbol, identifier = tokens[index + 1, 2]
+      symbol && identifier && symbol[1] == :on_symbeg && symbol[2] == ':' &&
+        identifier[1] == :on_ident && identifier[2] == name
+    end
+    unless declared
+      raise ParameterException, "define_task validation failed [declaration]: source must contain a Ruby task :#{name} declaration (not only a comment or string)"
     end
 
-    source = "module ScoutCoder\n\n#{definition.rstrip}\n\nend\n"
+    source = TaskDefinition.source(name, definition, export_type)
+    unless defined?(RubyVM::InstructionSequence)
+      raise ParameterException, 'define_task validation failed [syntax]: RubyVM::InstructionSequence is unavailable; refusing to write unchecked Ruby source'
+    end
     begin
-      RubyVM::InstructionSequence.compile(source, target) if defined?(RubyVM::InstructionSequence)
-      File.open(target, File::WRONLY | File::CREAT | File::EXCL, 0644) { |file| file.write(source) }
+      RubyVM::InstructionSequence.compile(source, target)
     rescue SyntaxError => error
-      raise ParameterException, "Invalid Ruby task definition: #{error.message}"
+      raise ParameterException, "define_task validation failed [syntax]: #{error.message}"
+    end
+
+    begin
+      # EXCL is the final no-overwrite guard against a concurrent creator.
+      File.open(target, File::WRONLY | File::CREAT | File::EXCL, 0644) { |file| file.write(source) }
     rescue Errno::EEXIST
-      raise ParameterException, "Task file already exists: #{target}; refusing to overwrite"
+      raise ParameterException, "define_task validation failed [no_overwrite]: task file already exists: #{target}; refusing to overwrite"
+    rescue SystemCallError => error
+      raise ParameterException, "define_task write failed [write]: #{error.message}"
     end
 
     { task: name, path: target, bytes: source.bytesize,
-      syntax_validated: !!defined?(RubyVM::InstructionSequence), overwritten: false }
+      validation: { task_name: 'passed', source: 'passed', declaration: 'passed',
+                    syntax: 'passed', load: 'not_run', registration: 'not_run',
+                    inspection: 'not_run',
+                    registration_validation: 'not_performed',
+                    registration_reason: 'Candidate task source is arbitrary Ruby and may execute top-level code. This task has no portable OS-level sandbox for a fresh Ruby subprocess, so loading it here could modify files or affect external processes. The syntax check does not execute the candidate.' },
+      written: true, overwritten: false }
   end
+
+  export :define_task, :list_tasks, :task_inputs, :task_code, :task_dependencies
+  export_exec :run_task, :job_info, :job_status
 end

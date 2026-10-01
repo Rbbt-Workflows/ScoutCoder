@@ -7,24 +7,21 @@ ScoutCoder=/$PWD filter="*.rb *.rake Rakefile *.rdoc *.R *.sh *.js *.haml *.sass
   claude
 
   implement
+
+  version_2
+
  }
  lib=lib {
   ScoutCoder=ScoutCoder{
+   task_test_support.rb
    tasks=tasks{
     documentation.rb
-    explore.rb
-    develop.rb
+    workflow_tools.rb
    }
   }
  }
  share=share{
-  prompts=prompts{
-   developer
-   supervisor
-   planer
-   return=return{
-    markdown
-   }
+  tasks=tasks{
   }
  }
 
