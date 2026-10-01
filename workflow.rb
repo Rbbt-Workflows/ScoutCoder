@@ -12,6 +12,7 @@ module ScoutCoder
 end
 
 
+require_relative 'lib/ScoutCoder/tasks/documentation'
 require_relative 'lib/ScoutCoder/tasks/document_task'
 require_relative 'lib/ScoutCoder/tasks/workflow_tools'
 require_relative 'lib/ScoutCoder/tasks/task_test_tools'
