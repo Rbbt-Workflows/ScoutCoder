@@ -208,7 +208,7 @@ module ScoutCoder
 
   # Create new authored task definitions under share/tasks. Keep this trusted
   # code interface with the tooling, not alongside the files it creates.
-  desc "Create a new ScoutCoder task source file
+  desc "Create a new ScoutCoder task source file and reload the workflow
 
 Inputs: `task_name`, `definition` (both required) and optional `export_type`.
 The task name must match `[a-z][a-z0-9_]*`; the Ruby source must declare the
@@ -217,8 +217,12 @@ and created as `share/tasks/<task_name>.rb` without overwriting an existing
 file. `export_type` accepts `export` (default), `export_exec`, or `none` to
 omit the export declaration.
 
-The candidate is not loaded or registered by this operation; `author_task_test`
-plus `run_task_test` provide the fresh-process load check, and `run_task` is
+After writing the candidate, this operation reloads the active ScoutCoder
+workflow in the current Ruby process and verifies that the task is registered.
+Loading executes all discovered `share/tasks/*.rb` files as trusted Ruby code;
+it may have side effects and a failed reload does not roll back the file or
+partially changed in-memory workflow state. `author_task_test` plus
+`run_task_test` still provide the fresh-process test check, and `run_task` is
 for interactive debugging once the loop is green."
   input :task_name, :string, 'New task identifier (lowercase letters, digits and underscores; starts with a letter)', nil, required: true
   input :definition, :text, 'Ruby task DSL source: desc/input declarations and a task declaration matching task_name', nil, required: true
@@ -285,12 +289,27 @@ for interactive debugging once the loop is green."
       raise ParameterException, "define_task write failed [write]: #{error.message}"
     end
 
+    workflow_file = File.expand_path('../../../workflow.rb', __dir__)
+    begin
+      reloaded_workflow = Workflow.require_workflow(workflow_file, update: true)
+    rescue StandardError, ScriptError => error
+      raise ParameterException,
+            "define_task reload failed after writing candidate #{target}; " \
+            "workflow entrypoint #{workflow_file} raised #{error.class}: #{error.message}"
+    end
+
+    unless reloaded_workflow && reloaded_workflow.tasks.include?(name.to_sym)
+      registered = reloaded_workflow && reloaded_workflow.tasks
+      available = registered ? registered.keys.sort_by(&:to_s).join(', ') : '(workflow unavailable)'
+      raise ParameterException,
+            "define_task registration failed after writing candidate #{target}; " \
+            "workflow #{workflow_file} did not register :#{name}. Available tasks: #{available}"
+    end
+
     { task: name, path: target, bytes: source.bytesize,
       validation: { task_name: 'passed', source: 'passed', declaration: 'passed',
-                    syntax: 'passed', load: 'not_run', registration: 'not_run',
-                    inspection: 'not_run',
-                    registration_validation: 'not_performed',
-                    registration_reason: 'Candidate task source is arbitrary Ruby and may execute top-level code. This task has no portable OS-level sandbox for a fresh Ruby subprocess, so loading it here could modify files or affect external processes. The syntax check does not execute the candidate.' },
+                    syntax: 'passed', load: 'passed', registration: 'passed',
+                    inspection: 'passed', registration_validation: 'passed' },
       written: true, overwritten: false }
   end
 

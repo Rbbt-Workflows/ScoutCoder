@@ -77,5 +77,72 @@ class TestWorkflowTools < Test::Unit::TestCase
       ScoutCoder::TaskDefinition.resolve_export_type(nil, 'invalid')
     end
   end
+
+  def test_define_task_reloads_and_registers_candidate
+    name = "scoutcoder_reload_#{Process.pid}_#{rand(1_000_000)}"
+    definition = "task :#{name} => :string do; 'registered'; end"
+    script = <<~'RUBY'
+      name = nil
+      begin
+        require './workflow'
+        require 'json'
+        name, definition = ARGV
+        result = ScoutCoder.job(:define_task, nil, task_name: name,
+                                definition: definition, export_type: 'none').run
+        raise 'candidate was not registered' unless ScoutCoder.tasks.include?(name.to_sym)
+        puts JSON.generate(result)
+      ensure
+        path = File.expand_path("share/tasks/#{name}.rb", Dir.pwd)
+        File.delete(path) if name && File.file?(path)
+      end
+    RUBY
+    stdout, stderr, status = Open3.capture3(RbConfig.ruby, '-Ilib', '-e', script,
+                                             name, definition,
+                                             chdir: File.expand_path('../../..', __dir__))
+    assert_predicate status, :success?, "isolated define_task failed (#{status.exitstatus}):\n#{stdout}\n#{stderr}"
+    result = JSON.parse(stdout)
+    assert_equal 'passed', result.dig('validation', 'syntax')
+    assert_equal 'passed', result.dig('validation', 'load')
+    assert_equal 'passed', result.dig('validation', 'registration')
+    refute File.file?(File.expand_path("../../../share/tasks/#{name}.rb", __dir__))
+  end
+
+  def test_define_task_wraps_reload_failure_and_keeps_candidate
+    name = "scoutcoder_reload_failure_#{Process.pid}_#{rand(1_000_000)}"
+    path = File.expand_path("../../../share/tasks/#{name}.rb", __dir__)
+    definition = "task :#{name} => :string do; 'registered'; end\nraise 'intentional load-time failure'"
+    script = <<~'RUBY'
+      name = nil
+      begin
+        require './workflow'
+        require 'json'
+        name, definition = ARGV
+        ScoutCoder.job(:define_task, nil, task_name: name,
+                       definition: definition, export_type: 'none').run
+        raise 'define_task unexpectedly succeeded'
+      rescue ParameterException => error
+        path = File.expand_path("share/tasks/#{name}.rb", Dir.pwd)
+        raise 'candidate missing at failure' unless File.file?(path)
+        raise 'missing reload-failure context' unless error.message.include?('define_task reload failed')
+        raise 'missing original load error' unless error.message.include?('RuntimeError: intentional load-time failure')
+        puts JSON.generate(class: error.class.name, message: error.message, candidate_retained: true)
+      ensure
+        path = File.expand_path("share/tasks/#{name}.rb", Dir.pwd)
+        File.delete(path) if name && File.file?(path)
+      end
+    RUBY
+    stdout, stderr, status = Open3.capture3(RbConfig.ruby, '-Ilib', '-e', script,
+                                             name, definition,
+                                             chdir: File.expand_path('../../..', __dir__))
+    assert_predicate status, :success?, "isolated reload-failure test failed (#{status.exitstatus}):\n#{stdout}\n#{stderr}"
+    result = JSON.parse(stdout)
+    assert_equal 'ParameterException', result['class']
+    assert_include result['message'], 'define_task reload failed'
+    assert_include result['message'], 'RuntimeError: intentional load-time failure'
+    assert_equal true, result['candidate_retained']
+    refute File.file?(path), 'disposable candidate should be removed by subprocess cleanup'
+  ensure
+    File.delete(path) if path && File.file?(path)
+  end
 end
 

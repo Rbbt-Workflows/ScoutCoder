@@ -147,13 +147,18 @@ overwriting an existing file. `export_type` accepts `export` or `export_exec`
 (the default, so the task appears as an agent tool), or `none` to omit the
 export declaration entirely. Invalid values are rejected.
 
-Candidate code is not loaded or smoke-tested by this operation, so task
-registration is not validated until the workflow is reloaded and the new task
-is discovered. The result distinguishes syntax validation from load,
-registration, and inspection, which are not performed by `define_task`.
-After the file is created, `author_task_test` can add a paired test and
-`run_task_test` executes it in a fresh Ruby process that loads the current
-`workflow.rb`, which is how the new task is first exercised.
+After syntax validation and file creation, `define_task` reloads the active
+ScoutCoder workflow in the current Ruby process and verifies that the task is
+registered. This loads all discovered `share/tasks/*.rb` files, not only the
+candidate. Their Ruby code is trusted and executes in-process; top-level side
+effects are possible. If loading fails, the candidate file remains on disk
+and workflow state may be partially changed in memory (there is no rollback).
+The result reports syntax, load, and registration validation separately.
+
+The development loop is `define_task` -> `author_task_test` ->
+`run_task_test` -> `run_task`. The test is run in a fresh Ruby process and is
+the validation step; use `run_task` only for interactive debugging after the
+test passes.
 
 Example definition text:
 

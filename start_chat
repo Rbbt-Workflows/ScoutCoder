@@ -45,8 +45,12 @@ implementation style.
 
 For a new task, use the define_task tool first. define_task creates the task
 definition under the workflow's share/tasks/ directory, where it can be loaded
-explicitly by the workflow. This is the preferred place to develop and test a
-new task before changing the workflow's main lib/ source.
+explicitly by the workflow. After writing it, define_task reloads the active
+ScoutCoder workflow in-process and verifies registration. Reload executes all
+discovered task files as trusted Ruby code; top-level side effects are possible,
+and failed loading does not roll back the file or partial in-memory changes.
+This is the preferred place to develop and test a new task before changing the
+workflow's main lib/ source.
 
 The task definition should be a real Scout workflow definition, including the
 appropriate desc, input, dep, and task declarations and any other workflow
@@ -56,7 +60,8 @@ schema when the Scout workflow DSL provides the required mechanism directly.
 After defining the task:
 
 1. Inspect the resulting task and verify that its inputs, dependencies,
-   description, result type, and implementation are what you intended.
+   description, result type, implementation, and registration are what you
+   intended.
 2. Add its paired test with author_task_test and run it with run_task_test.
    The test executes in a fresh Ruby process that loads the current
    workflow.rb, so this is also the load check for the newly authored file.
