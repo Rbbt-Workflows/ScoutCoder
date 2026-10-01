@@ -1,6 +1,6 @@
 module ScoutCoder
 
-  desc "Add or replace a task entry in the ScoutCoder README.md Tasks section.\n\nInputs: `task_name` and `documentation`. Replaces the existing `## <task_name>` entry, or appends a new entry at the end of the `# Tasks` section. The documentation is Markdown body text placed beneath the generated heading."
+  # Promoted task: documentation lives in README.md (## document_task), not desc.
   input :task_name, :string, 'Name of the task to document', nil, required: true, nofile: true
   input :documentation, :text, 'Markdown documentation for the task entry', nil, required: true
 

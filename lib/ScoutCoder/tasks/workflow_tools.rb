@@ -208,22 +208,7 @@ module ScoutCoder
 
   # Create new authored task definitions under share/tasks. Keep this trusted
   # code interface with the tooling, not alongside the files it creates.
-  desc "Create a new ScoutCoder task source file and reload the workflow
-
-Inputs: `task_name`, `definition` (both required) and optional `export_type`.
-The task name must match `[a-z][a-z0-9_]*`; the Ruby source must declare the
-matching task. The source is wrapped in `module ScoutCoder`, syntax-checked,
-and created as `share/tasks/<task_name>.rb` without overwriting an existing
-file. `export_type` accepts `export` (default), `export_exec`, or `none` to
-omit the export declaration.
-
-After writing the candidate, this operation reloads the active ScoutCoder
-workflow in the current Ruby process and verifies that the task is registered.
-Loading executes all discovered `share/tasks/*.rb` files as trusted Ruby code;
-it may have side effects and a failed reload does not roll back the file or
-partially changed in-memory workflow state. `author_task_test` plus
-`run_task_test` still provide the fresh-process test check, and `run_task` is
-for interactive debugging once the loop is green."
+  # Promoted task: documentation lives in README.md (## define_task), not desc.
   input :task_name, :string, 'New task identifier (lowercase letters, digits and underscores; starts with a letter)', nil, required: true
   input :definition, :text, 'Ruby task DSL source: desc/input declarations and a task declaration matching task_name', nil, required: true
   input :export_type, :string, 'Optionally export the generated task with export or export_exec (none to omit)', 'export'

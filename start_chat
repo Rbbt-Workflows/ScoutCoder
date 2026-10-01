@@ -74,10 +74,12 @@ After defining the task:
    extension in share/tasks/ or be moved into the workflow's main lib/ source.
 6. If moving it into lib/, use Workspace to make the source-level change rather
    than trying to make define_task modify the workflow's main source files.
-7. When a task is incorporated into the main workflow source, update the
-   workflow documentation, including README.md, as appropriate. Treat
-   documentation updates as a deliberate source change rather than something
-   that happens automatically from desc.
+7. When a task is incorporated into the main workflow source, its
+   documentation moves too: the `desc` declaration is removed from the source
+   and the entry is added to README.md's `# Tasks` section with the
+   `document_task` tool. A promoted task must not keep documentation in both
+   places. Treat documentation updates as a deliberate source change rather
+   than something that happens automatically from desc.
 8. Reinspect and retest the final workflow after moving the task or otherwise
    changing its permanent location.
 

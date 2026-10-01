@@ -110,6 +110,11 @@ normal authoring loop is `define_task` to create
 `share/tasks/<task_name>.rb`, `author_task_test` to add its paired test, and
 `run_task_test` to execute that test in a fresh Ruby process; `run_task` is
 kept for debugging a task interactively once the loop is green.
+
+While a task lives under `share/tasks`, its documentation is its `desc`
+declaration. When the task is promoted into `lib/ScoutCoder/tasks`, the
+`desc` is removed and the documentation is written into this README's `# Tasks`
+section with `document_task`; a promoted task must not keep both.
 `define_task` validates the declaration and Ruby syntax but does not load the
 candidate, confirm task registration, or smoke-test it; the paired-test run
 is the load check. `run_task` executes synchronously and reports whether it
@@ -158,7 +163,9 @@ The result reports syntax, load, and registration validation separately.
 The development loop is `define_task` -> `author_task_test` ->
 `run_task_test` -> `run_task`. The test is run in a fresh Ruby process and is
 the validation step; use `run_task` only for interactive debugging after the
-test passes.
+test passes. Documentation for a task still under `share/tasks` is supplied
+with `desc` in its definition; at promotion time the `desc` is removed and
+`document_task` writes the README entry instead.
 
 Example definition text:
 
@@ -200,6 +207,20 @@ output and standard error, timeout status, and the invocation details. A fresh
 Ruby process loads current source and task discovery, but does not clear
 persistent Scout job caches; tests should explicitly clean jobs where
 freshness matters.
+
+## document_task
+Add or replace a task entry in the ScoutCoder README.md Tasks section
+
+Inputs: `task_name` and `documentation`. Replaces the existing
+`## <task_name>` entry, or appends a new entry at the end of the `# Tasks`
+section. The documentation is Markdown body text placed beneath the generated
+heading.
+
+This is the promotion step for task documentation: an authored task carries
+its documentation in a `desc` while it lives under `share/tasks`, and when it
+is promoted into `lib/ScoutCoder/tasks` the `desc` is removed and the entry is
+written here with `document_task`. See the Testing and development notes above
+for the promotion loop.
 
 ## list_tasks
 List tasks declared by a workflow
