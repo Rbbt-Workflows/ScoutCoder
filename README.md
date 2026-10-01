@@ -142,6 +142,49 @@ not enumerate the complete dependency list; the output explicitly marks the
 list as incomplete when applicable.
 
 ## define_task
+## define_helper
+Create and register a reusable ScoutCoder workflow helper
+
+Inputs: `helper_name` and `definition` (both required). The identifier must
+match `[a-z][a-z0-9_]*`; the source must declare the matching `helper :name`.
+The source is wrapped in `module ScoutCoder`, syntax-checked, and written as
+`share/helpers/<helper_name>.rb` without overwriting an existing definition.
+The workflow loader loads every `share/helpers/*.rb` file after authored tasks;
+`define_helper` then reloads the workflow and confirms the helper is registered.
+As with authored tasks, the candidate remains on disk if reload or registration
+fails, and loading trusted Ruby source can have top-level side effects.
+
+Example definition text:
+
+```ruby
+definition = <<~'RUBY'
+  helper :normalize do |values|
+    total = values.sum(&:to_f)
+    values.map { |value| value.to_f / total }
+  end
+RUBY
+
+ScoutCoder.job(:define_helper, helper_name: 'normalize', definition: definition).run
+```
+
+## author_helper_test
+Create a test for an existing ScoutCoder-authored workflow helper
+
+Inputs: `helper_name` and `test_source`. Writes a syntax-checked test to
+`share/test/helper/<helper_name>.rb`; existing tests are never overwritten.
+Because workflow helpers execute in a task Step context, helper tests should
+declare a disposable fake task that calls the helper, run that task's Step,
+and assert its result. Test source is trusted Ruby code and is not OS-sandboxed.
+
+## run_helper_test
+Run an authored helper test in a fresh Ruby process
+
+Inputs: `helper_name` and positive `timeout_seconds` (default 120). Loads the
+current workflow and authored helper files, then runs the paired test. Returns
+pass/fail, exit status, captured output, and timeout status. Persistent Step
+results are not cleared automatically; tests should clean their fake-task Step
+when freshness matters.
+
 Create a new ScoutCoder task source file
 
 Inputs: `task_name` and `definition` (both required) plus optional
@@ -183,7 +226,6 @@ ScoutCoder.job(:define_task,
 ```
 
 
-## author_task_test
 Create a test for an existing ScoutCoder-authored task
 
 Inputs: `task_name` and `test_source`. The paired test is written following

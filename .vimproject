@@ -13,6 +13,8 @@ ScoutCoder=/$PWD filter="*.rb *.rake Rakefile *.rdoc *.R *.sh *.js *.haml *.sass
   version_2.task_doc
   version_2.task_doc.analyze
 
+  version_2.entities
+
  }
  lib=lib {
   ScoutCoder=ScoutCoder{
