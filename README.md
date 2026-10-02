@@ -1,12 +1,19 @@
 Documentation to help coding agents writing Scout code
 
-ScoutCoder is an AI-assisted Scout workflow for retrieving framework documentation, exploring project files, and coordinating multi-agent development work over a local codebase. The documentation lookup also covers any installed Scout workflow, since workflows can carry their own README.md, doc*/ and research/ folders in the same format as Scout repositories.
+ScoutCoder is an AI-assisted Scout workflow for retrieving framework
+documentation, exploring installed workflows, and authoring or inspecting
+Scout workflow tasks, helpers, entities and their tests over a local
+checkout. The documentation lookup also covers any installed Scout workflow,
+since workflows can carry their own README.md, doc*/ and research/ folders in
+the same format as Scout repositories.
 
-The workflow combines three complementary capabilities. First, it exposes documentation lookup tasks for the Scout ecosystem, backed by local clones of the `scout-gear`, `scout-essentials`, `scout-camp`, `scout-ai`, and `scout-rig` repositories under `~/git`. Second, it provides project-understanding tasks that can summarize files, explain code, and generate a navigable description of a directory. Third, it contains agentic planning and implementation tasks that turn a natural-language request into a plan and then into delegated work across specialized prompts.
-
-ScoutCoder is also structured as an agent directory. In `workflow.rb`, the `agent` helper either loads a named agent such as `ScoutCoder` or creates a fresh ad hoc agent seeded from the local `start_chat` file. The prompt templates under `share/prompts/` specialize the behavior of developer, supervisor, planner, and markdown-returning agents. This makes the workflow useful both as a normal Scout workflow and as a tool bundle for LLM-driven agents.
-
-The workflow includes the `ComputerUse` workflow, so the same workflow instance also exposes practical file, search, execution, conversion, and patching tools such as `read`, `write`, `list_directory`, `patch`, `ruby`, `python`, `playwright`, `html2md`, and `pdf2md`. In practice, the ScoutCoder-specific tasks rely on these inherited utilities to inspect a repository and to produce reports or code changes without requiring a separate helper workflow.
+ScoutCoder concentrates on two groups of capabilities. First, documentation
+lookup tasks for the Scout ecosystem, backed by local clones of the
+`scout-gear`, `scout-essentials`, `scout-camp`, `scout-ai`, and `scout-rig`
+repositories under `~/git` and by every installed Scout workflow. Second,
+workflow-development tooling: tasks to author tasks, helpers and entity
+definitions, pair them with tests, run those tests in fresh processes, run
+any installed workflow task, and inspect or document the resulting jobs.
 
 A few small examples illustrate the intended use:
 
@@ -24,31 +31,22 @@ text = ScoutCoder.job(:help_get_repo_document, nil,
   document: 'user/Cookbook.md'
 ).run
 
-summary = ScoutCoder.job(:summarize_file, nil,
-  file: 'workflow.rb'
-).run
+entities = ScoutCoder.job(:list_entities).run
 
-guide = ScoutCoder.job(:explore_directory_structure, nil,
-  directory: '.'
-).run
-
-plan = ScoutCoder.job(:plan, nil,
-  prompt: 'Add a new task and document it'
+listing = ScoutCoder.job(:list_tasks, nil,
+  workflow: 'ScoutCoder'
 ).run
 ```
 
 ```bash
-scout workflow task ScoutCoder explain_code \
-  --files workflow.rb,lib/ScoutCoder/tasks/documentation.rb
-
+scout workflow task ScoutCoder help_list_repos
 scout workflow task ScoutCoder help_workflow \
   --workflow ScoutCoder
-
-scout workflow task ScoutCoder list_directory \
-  --directory .
 ```
 
-The documentation tasks are most useful when an agent needs Scout-specific context before touching code. The exploration tasks are useful when the agent first needs to understand an unfamiliar repository. The planning and implementation tasks are higher-level orchestration steps intended to break a request into work and then execute that work with agent assistance.
+The documentation tasks are most useful when an agent needs Scout-specific
+context before touching code. The authoring and inspection tasks are the
+normal working loop for developing or auditing workflow code.
 
 When developing code in ruby using the Scout/Rbbt framework, if you struggle
 with some detail that you had to figure out but could be better explained in
@@ -71,15 +69,217 @@ Open.consume_stream io
 
 ```
 
+## Layout conventions
+
+- `workflow.rb` - workflow entrypoint. It requires the lib task files, then
+  loads this checkout's built-in entity definitions from
+  `lib/ScoutCoder/entity/*.rb`, then `extend ScoutCoder::LiveWorkflow`
+  (which loads the authoring drafts under `share/`), and finally the built-in
+  entity property files under `lib/ScoutCoder/entity/<entity>/**/*.rb`. This
+  combined order guarantees every entity extend happens before any property
+  registration, from either source.
+- `lib/ScoutCoder/` - shipped functionality: task definitions under
+  `lib/ScoutCoder/tasks/`, the `LiveWorkflow` module, the built-in entity
+  tree under `lib/ScoutCoder/entity/`, and the shared test-support modules
+  (`task_test_support.rb`, `helper_test_support.rb`).
+- `share/` - the authoring-drafts convention. `share/tasks/`,
+  `share/helpers/`, `share/entities/` and `share/entity_properties/` hold
+  draft definitions loaded live by `LiveWorkflow` on every workflow reload,
+  in ScoutCoder's own checkout and in any other workflow that extends it.
+  ScoutCoder's own four draft directories are currently empty, so extending
+  is a no-op here today.
+- `share/test/task/` and `share/test/helper/` - the paired tests for
+  authoring-draft tasks and helpers, run in fresh processes by
+  `run_task_test` and `run_helper_test`. They are never loaded by
+  `LiveWorkflow`.
+- `share/entity/` - identifier TSVs (`<entity>.identifiers.tsv`) generated by
+  `define_entity`. Data, not code: they are registered by the generated
+  entity definition and never loaded as Ruby.
+- `test/` - the unit-test tree for the shipped code, following the Scout
+  convention `test/ScoutCoder/...` mirroring `lib/ScoutCoder/...`. Built-in
+  task tests live at `test/ScoutCoder/tasks/test_<file>.rb`.
+- `research/` - non-authoritative notes shared between agents and
+  executions.
+- `doc/` - none. This README is the sole documentation file for ScoutCoder.
+
+## LiveWorkflow
+
+`ScoutCoder::LiveWorkflow` (in `lib/ScoutCoder/LiveWorkflow.rb`) is the
+mechanism that makes `share/` authoring drafts live. A target workflow that
+extends it gets every `*.rb` draft under its own `share/` loaded on each
+(re)evaluation of its `workflow.rb`, so tasks, helpers and entity drafts
+register on the workflow without any manual load block. ScoutCoder extends it
+itself, which is how its own drafts would be picked up.
+
+Usage in a target workflow (this is the same generated pattern the
+LiveWorkflow test suite builds; only the path to ScoutCoder's lib changes):
+
+```ruby
+require 'scout'
+
+scoutcoder_lib = File.expand_path('../../ScoutCoder/lib', __dir__)
+$LOAD_PATH.unshift(scoutcoder_lib) unless $LOAD_PATH.include?(scoutcoder_lib)
+require 'ScoutCoder/LiveWorkflow'
+
+module MyWorkflow
+  extend Workflow
+  extend ScoutCoder::LiveWorkflow
+end
+```
+
+The two `extend` lines are the whole integration: `Workflow` first, then
+`LiveWorkflow`. The required file defines `module ScoutCoder` with the
+`LiveWorkflow` submodule, so it can be loaded from any checkout whose
+`lib/ScoutCoder` is on the load path.
+
+Load order, on every pass: `share/tasks`, `share/helpers`,
+`share/entities`, `share/entity_properties` - top-level files of each
+subdirectory before nested ones, lexicographic within a level, so loads are
+deterministic. Entity files always precede property files, because
+re-extending `Entity` resets property metadata: a property file loaded before
+its entity file ends up unregistered. That ordering is a contract, not an
+implementation detail. ScoutCoder's own `workflow.rb` relies on the same
+rule across sources: lib entities load, then `extend LiveWorkflow` (which
+loads share entities and share properties), then lib properties, so every
+entity extend precedes every property registration whether the entity or the
+property comes from `lib/` or from `share/`.
+
+Reload semantics. `extend ScoutCoder::LiveWorkflow` re-fires `self.extended`
+on every re-extension, and `Workflow.require_workflow(file, update: true)`
+re-evaluates `workflow.rb`, so adding or editing a draft file and reloading
+the workflow picks up the change without restarting. Files are loaded with
+Kernel#load, not require, so they re-execute every time. For the
+loaded-but-not-re-evaluated case (a workflow object already in memory), call
+`workflow.load_live_files!` explicitly; it is the same implementation as the
+extended hook. Re-loading never raises on re-declaration: tasks reassign,
+helpers redefine, and re-extending Entity is expected behavior.
+
+Draft files must wrap themselves in their workflow module (`module MyWorkflow
+... end`), because `Kernel#load` always evaluates the file at top level with
+`self` set to main; `module_eval { load file }` cannot change that. This is
+also the convention of the `define_task` and `define_helper` generators, so
+generated drafts follow it automatically.
+
+Exclusions and tolerance:
+
+- `share/test` is never loaded, in any shape; task and helper tests run in
+  fresh processes instead.
+- Only `*.rb` files are selected, so identifier TSVs such as
+  `share/entity/<entity>.identifiers.tsv` are never loaded as Ruby.
+- Missing or empty share subdirectories, and a missing `share/` itself,
+  contribute nothing; extending remains valid with no `libdir`.
+- Removing a draft file stops re-registering it, but the task or module it
+  defined stays in memory for the process lifetime: Ruby cannot unload
+  constants or methods. A fresh process clears it. Reload after removal is
+  therefore tolerated (no error), not reverted.
+
+## Authoring ScoutCoder entities
+
+ScoutCoder can create entity modules and their properties in this checkout under
+`lib/ScoutCoder/entity/`. Use
+`define_entity` to create a module and `define_entity_property` to add one
+property at a time. Entity names and property names must match
+`[a-z][a-z0-9_]*`; an entity name such as `sample_entity` maps to
+`ScoutCoder::SampleEntity`. The entity base defaults to `Entity`; choose
+`EntityWorkflow` explicitly when the module should also expose workflow
+behavior. The definition inputs are trusted Ruby source bodies: do not include
+the generated `module ScoutCoder`, entity module, or `extend Entity` /
+`extend EntityWorkflow` wrapper (supplying an `extend Entity` /
+`extend EntityWorkflow` call inside the body is rejected; select the base with
+the `base` input). For a property, include its matching
+`property :<property_name>` declaration in the body.
+
+For example, these calls define an entity and then add its property:
+
+```ruby
+entity_definition = <<~'RUBY'
+  annotation :organism, 'Example organism'
+RUBY
+
+ScoutCoder.job(:define_entity,
+  entity_name: 'sample_entity',
+  definition: entity_definition
+).run
+
+property_definition = <<~'RUBY'
+  property :label do
+    "sample:#{self}"
+  end
+RUBY
+
+ScoutCoder.job(:define_entity_property,
+  entity_name: 'sample_entity',
+  property_name: 'label',
+  definition: property_definition
+).run
+```
+
+`define_entity` writes `lib/ScoutCoder/entity/<entity>.rb`; each call to
+`define_entity_property` writes `lib/ScoutCoder/entity/<entity>/<property>.rb`.
+The workflow loader loads the entity definitions first and then recursively loads
+property files in sorted order (see Layout conventions and LiveWorkflow for the
+combined order). Both authoring tasks reload the checkout's `workflow.rb` and
+confirm registration. They refuse to overwrite existing
+entity/property files or an already-registered entity/property. They check
+names, Ruby syntax, and the entity/property declaration; they do not prove the
+semantics of the Ruby code. Since the supplied source executes during workflow
+loading and reload, treat it as trusted code, not sandboxed input. A reload or
+registration failure can occur after the candidate file has been written; the
+task reports the failure but does not generally roll back that file.
+
+An optional `identifiers` input to `define_entity` is the TSV text to write at
+`share/entity/<entity>.identifiers.tsv`. It must be non-empty and have a header
+accepted by `TSV.parse_header`; the generated entity definition registers that
+path with `add_identifiers` at load time. The path is constructed relative to
+the entity definition file, so registration does not depend on the process's
+current working directory. The TSV header fields are the identifier formats used by
+the entity translation machinery; see the Scout-gear
+[Working with Entities](https://github.com/rbbt-workflows/scout-gear/blob/master/doc/user/WorkingWithEntities.md)
+documentation for the TSV identifier-file conventions. Supplying identifier
+text also refuses to overwrite an existing identifier file.
+
+Use `list_entities` to inspect every entity module known to the process:
+
+```ruby
+entities = ScoutCoder.job(:list_entities).run
+```
+
+With no inputs the task returns one record per module that has extended
+`Entity` in the current process, deduplicated: framework modules such as
+`AssociationItem` appear alongside any ScoutCoder entities, because the
+default enumeration walks the append-only `Entity::MODULES` registry (a
+workflow reload re-extends the same module object, which would otherwise
+duplicate rows). Its sorted results include each entity's name, module,
+detected base kind, annotations, formats, identifier files, registered
+properties, effective dispatch, persistence flags, plus inferred source-path
+fields. Source paths are inferred from the conventional
+`lib/ScoutCoder/entity/` layout, not tracked from Ruby's runtime source
+locations, so framework modules report no checkout paths. Effective dispatch
+is inferred from generated method names, so it cannot distinguish the
+original `:single2array` alias from `:single`, or `:array2single` from
+`:array`. The underlying helper also accepts an explicit module scope, which
+restricts the listing to that module's own entity constants; the task itself
+exposes no input for it.
+
+Entity definitions and property files are loaded from
+`lib/ScoutCoder/entity/`. Identifier TSV files remain under `share/entity/`;
+they are resource data registered by the generated entity definition. Files
+placed elsewhere are not loaded by this entity-loading step unless another
+part of the workflow explicitly loads them. Draft entities and properties
+authored under `share/entities/` and `share/entity_properties/` follow the
+`LiveWorkflow` convention instead and are loaded by the extend hook.
+
 ## Testing
 
 ScoutCoder-authored task tests can be created with `author_task_test` and run
 with `run_task_test`. For a task authored at `share/tasks/<task_name>.rb`, the
-paired test is stored at `share/test/task/<task_name>.rb`. Authoring requires
-an existing task source under `share/tasks`, validates the name and Ruby
-syntax, and refuses to overwrite an existing test. The runner starts a fresh
-Ruby process, loads the current `workflow.rb` (including the task files it
-discovers), runs that test, and returns its exit status and captured output.
+paired test is stored at `share/test/task/<task_name>.rb`. For a built-in task
+in `lib/ScoutCoder/tasks/<file>.rb`, its test is stored at
+`test/ScoutCoder/tasks/test_<file>.rb`. Authoring requires an existing task
+source, validates the name and Ruby syntax, and refuses to overwrite an
+existing test. The runner starts a fresh Ruby process, loads the current
+`workflow.rb` (including the task files it discovers), runs that test, and
+returns its exit status and captured output.
 It has a configurable positive timeout (default 120 seconds). Tests that
 execute Scout jobs should clean the addressed jobs themselves when freshness
 matters; a fresh Ruby process does not imply an empty persistent Scout job
@@ -100,30 +300,54 @@ ScoutCoder.job(:author_task_test, nil,
 ).run
 ```
 
-These helpers address task source at `share/tasks/<task_name>.rb` and test
-source at `share/test/task/<task_name>.rb` in this checkout.
-
-When developing a Scout workflow, use ScoutCoder's workflow-development
-tools to discover tasks, inspect their inputs, source and declared
-dependencies, run a task, and inspect or monitor the resulting job. The
-normal authoring loop is `define_task` to create
-`share/tasks/<task_name>.rb`, `author_task_test` to add its paired test, and
-`run_task_test` to execute that test in a fresh Ruby process; `run_task` is
-kept for debugging a task interactively once the loop is green.
+The workflow-development tools can discover tasks, inspect their inputs,
+source and dependencies, run a task, and inspect or monitor its job. The normal
+authoring loop for an extension task is `define_task` -> `author_task_test` ->
+`run_task_test`; use `run_task` for interactive debugging after the test passes.
 
 While a task lives under `share/tasks`, its documentation is its `desc`
-declaration. When the task is promoted into `lib/ScoutCoder/tasks`, the
-`desc` is removed and the documentation is written into this README's `# Tasks`
-section with `document_task`; a promoted task must not keep both.
-`define_task` validates the declaration and Ruby syntax but does not load the
-candidate, confirm task registration, or smoke-test it; the paired-test run
-is the load check. `run_task` executes synchronously and reports whether it
-replayed a cached result; clean (or otherwise establish freshness) when
-validating recent code changes. `job_info` and `job_status` inspect an
-addressed job without running the task again. The following tools describe
-and operate on tasks in the named workflow.
+declaration. When promoted into `lib/ScoutCoder/tasks`, remove the `desc` and
+write the documentation into this README's `# Tasks` section with
+`document_task`; do not keep both. The test runner loads the current workflow
+in a fresh Ruby process, but persistent job caches are not cleared
+automatically. `run_task` reports whether a result was replayed; clean or
+otherwise establish freshness when validating source changes. `job_info` and
+`job_status` inspect a job without running it again. The following task
+reference documents the workflow tools.
 
 # Tasks
+
+## define_entity
+Create and register an entity module in this checkout
+
+Inputs: required `entity_name` and trusted Ruby `definition`; optional `base`
+(default `Entity`, or `EntityWorkflow`) and `identifiers` (TSV contents).
+Writes `lib/ScoutCoder/entity/<entity>.rb` and reloads `workflow.rb` to register
+the module. See [Authoring ScoutCoder entities](#authoring-scoutcoder-entities)
+above for the input-body format, identifier-file conventions, limitations,
+and examples.
+
+## define_entity_property
+Add one property to an existing ScoutCoder entity
+
+Inputs: required `entity_name`, `property_name`, and trusted Ruby `definition`
+containing a matching `property :<property_name>` declaration. Writes
+`lib/ScoutCoder/entity/<entity>/<property>.rb`, reloads the workflow, and
+checks that the property is registered. See
+[Authoring ScoutCoder entities](#authoring-scoutcoder-entities) above.
+
+## list_entities
+List all known entity modules and metadata
+
+Takes no inputs. Returns a sorted array of entity records covering every
+module that has extended `Entity` in the current process, deduplicated, so
+framework modules such as `AssociationItem` are listed beside any ScoutCoder
+entities. Each record includes annotations, formats, identifier files,
+properties, inferred source paths, effective dispatch, persistence status, and
+detected base kind. Source paths are inferred from the conventional
+`lib/ScoutCoder/entity/` layout and are absent for framework modules; dispatch
+is inferred from generated method names, with the alias limitations described
+in [Authoring ScoutCoder entities](#authoring-scoutcoder-entities) above.
 
 ## task_code
 Inspect a task's source location and source-file text
@@ -142,6 +366,47 @@ not enumerate the complete dependency list; the output explicitly marks the
 list as incomplete when applicable.
 
 ## define_task
+Create a new ScoutCoder task source file
+
+Inputs: `task_name` and `definition` (both required) plus optional
+`export_type`. The task name must match `[a-z][a-z0-9_]*`; the Ruby source
+must declare the matching task. The source is wrapped in `module ScoutCoder`,
+syntax-checked, and created as `share/tasks/<task_name>.rb` without
+overwriting an existing file. `export_type` accepts `export` or `export_exec`
+(the default), or `none` to omit the export declaration. The task directory is
+created when needed.
+
+After writing the candidate, `define_task` reloads the workflow and verifies
+that the task is registered. This loads discovered `share/tasks/*.rb` files;
+their trusted Ruby code executes in-process and may have top-level side effects.
+If loading fails, the candidate remains on disk and workflow state may be
+partially changed. The result reports task-name, source, declaration, syntax,
+load, and registration validation.
+
+Use `author_task_test` and `run_task_test` as the test loop. For a task in
+`share/tasks/`, its test is `share/test/task/<task_name>.rb`. Tests for built-in
+tasks in `lib/ScoutCoder/tasks/` are placed under `test/ScoutCoder/tasks/` as
+`test_<file>.rb`. A fresh test process does not clear persistent Scout job
+caches; clean jobs explicitly when freshness matters. Documentation for an
+authored task lives in its `desc`; when promoting a task into `lib/`, remove
+that `desc` and document it here with `document_task`.
+
+Example definition:
+
+```ruby
+definition = <<~'RUBY'
+  desc 'Greet someone'
+  task :greet, :string do |name|
+    "Hello, #{name}!"
+  end
+RUBY
+
+ScoutCoder.job(:define_task,
+  task_name: 'greet',
+  definition: definition
+).run
+```
+
 ## define_helper
 Create and register a reusable ScoutCoder workflow helper
 
@@ -185,47 +450,7 @@ pass/fail, exit status, captured output, and timeout status. Persistent Step
 results are not cleared automatically; tests should clean their fake-task Step
 when freshness matters.
 
-Create a new ScoutCoder task source file
-
-Inputs: `task_name` and `definition` (both required) plus optional
-`export_type`. The task name must match `[a-z][a-z0-9_]*`; the Ruby source
-must declare the matching task. The source is wrapped in `module ScoutCoder`,
-syntax-checked, and created as `share/tasks/<task_name>.rb` without
-overwriting an existing file. `export_type` accepts `export` or `export_exec`
-(the default, so the task appears as an agent tool), or `none` to omit the
-export declaration entirely. Invalid values are rejected.
-
-After syntax validation and file creation, `define_task` reloads the active
-ScoutCoder workflow in the current Ruby process and verifies that the task is
-registered. This loads all discovered `share/tasks/*.rb` files, not only the
-candidate. Their Ruby code is trusted and executes in-process; top-level side
-effects are possible. If loading fails, the candidate file remains on disk
-and workflow state may be partially changed in memory (there is no rollback).
-The result reports syntax, load, and registration validation separately.
-
-The development loop is `define_task` -> `author_task_test` ->
-`run_task_test` -> `run_task`. The test is run in a fresh Ruby process and is
-the validation step; use `run_task` only for interactive debugging after the
-test passes. Documentation for a task still under `share/tasks` is supplied
-with `desc` in its definition; at promotion time the `desc` is removed and
-`document_task` writes the README entry instead.
-
-Example definition text:
-
-```ruby
-definition = <<~'RUBY'
-  task :greet, :string do |name|
-    "Hello, #{name}!"
-  end
-RUBY
-
-ScoutCoder.job(:define_task,
-  task_name: 'greet',
-  definition: definition
-).run
-```
-
-
+## author_task_test
 Create a test for an existing ScoutCoder-authored task
 
 Inputs: `task_name` and `test_source`. The paired test is written following
@@ -241,10 +466,10 @@ execute it. Test source is trusted code and is not OS-sandboxed.
 Run an authored task test in a fresh Ruby process
 
 Inputs: `task_name` and positive `timeout_seconds` (default 120). Loads the
-current `workflow.rb` (including every authored task file), then executes the
-paired test — `share/test/task/<task_name>.rb` for tasks under `share/tasks`,
+current `workflow.rb` (including every authored task file), then executes
+the paired test - `share/test/task/<task_name>.rb` for tasks under `share/tasks`,
 or `test/ScoutCoder/tasks/test_<file>.rb` for tasks in `lib/ScoutCoder/tasks`
-— with `lib/` on the Ruby load path. Returns pass/fail, exit status, standard
+- with `lib/` on the Ruby load path. Returns pass/fail, exit status, standard
 output and standard error, timeout status, and the invocation details. A fresh
 Ruby process loads current source and task discovery, but does not clear
 persistent Scout job caches; tests should explicitly clean jobs where
@@ -268,9 +493,12 @@ for the promotion loop.
 List tasks declared by a workflow
 
 Inputs: `workflow` (required string). Returns the sorted tasks with each
-task's name, description, result type, and directly declared inputs. This is
-the discovery step; dependencies are not included in this listing. Use
-`task_inputs` to inspect inputs propagated from dependencies as well.
+task's name, description, result type, directly declared inputs, source
+location, and a dependency summary. The dependency summary reports the static
+declarations and whether a dynamic dependency block is present; it does not
+expand dynamic blocks into a complete dependency list. Use `task_inputs` to
+inspect inputs propagated from dependencies as well, and `task_dependencies`
+for the dependency detail.
 
 ## task_inputs
 Inspect direct and recursive inputs for one workflow task
@@ -313,7 +541,7 @@ Inspect the recorded information for a workflow job
 
 Inputs: `workflow` and `task` (required strings), and `inputs` (JSON object as
 text, default `{}`). Resolves the job from those values and reports its job path and short path,
-status, timestamps, messages, and exception metadata when available. It does not run the task.
+info file, status, timestamps, messages, and exception metadata when available. It does not run the task.
 
 ## job_status
 Inspect the current status of a workflow job
@@ -339,7 +567,9 @@ The `repo` input is a required free string (a `:string` input declared with `nof
 
 The listing covers the source's `README.md` plus all markdown files under its `doc*/` subtrees plus the markdown files under its `research/`. Identifiers are relative to their containing `doc*` directory (for example `doc/user/Cookbook.md` is listed as `user/Cookbook.md`), `README.md` keeps its literal name, and research files carry a `research/` prefix.
 
-Names that are neither a `~/git` checkout nor a resolvable installed workflow raise a controlled `ParameterException` ("Unknown repo or workflow: <name>"). This is the normal follow-up to `help_list_repos` or `help_list_workflows`: agents inspect the available document identifiers first and then request the specific files that match the concepts they need.
+A source is resolved by first looking for an existing `~/git/<name>` directory and using it directly when present; otherwise the name is loaded as a workflow with network autoinstall disabled and its checkout root is derived from the workflow `libdir` (the parent directory when `libdir` ends in `lib`, `libdir` itself otherwise). Names matching neither raise a controlled `ParameterException` ("Unknown repo or workflow: <name>"). This is the normal follow-up to `help_list_repos` or `help_list_workflows`: agents inspect the available document identifiers first and then request the specific files that match the concepts they need.
+
+Only markdown (`.md`) files are listed. When a source has several `doc*` directories holding the same relative paths, the identifiers collide and the last file from the glob wins.
 
 ## help_get_repo_document
 Return the contents of a documentation file from one Scout repository or workflow
@@ -348,27 +578,29 @@ The `repo` input has the same semantics as in `help_list_repo_documents`: a requ
 
 The task resolves the document through a fallback chain: the literal `README.md` of the source, an exact identifier match from the listing, a `doc*/**/<document>` glob, a direct `research/` or `doc/` path, and finally a `research/**/<document>` glob. The full text of the first match is returned.
 
-If no step of the chain matches, the task raises a `ParameterException` whose message lists up to 10 available documents, which makes failures explicit and easy for an agent to recover from.
+If no step of the chain matches, the task raises a `ParameterException` whose message lists up to 10 available documents, which makes failures explicit and easy for an agent to recover from. Treat that exception as a normal miss, not a crash.
 
 This is the lowest-level documentation lookup task. Use it when an agent already knows the exact document it needs and wants the raw markdown to read or quote.
 
 ## help_overview
 Generate a guide to the available Scout framework documentation
 
-This task builds a synthetic overview by reading all documentation files from the known Scout repositories and asking an agent to produce a markdown guide for other agents. The result is not a static hand-written file; it is generated from the currently available documentation and can evolve as the source repositories evolve.
+This task builds a synthetic overview by reading the `README.md` and `doc/**/*.md` files of the known Scout repositories and asking an LLM agent to produce a markdown guide for other agents. The result is not a static hand-written file; it is generated from the currently available documentation and can evolve as the source repositories evolve. It aggregates the fixed `REPOS` list only, not installed workflow sources, and it issues one model call over all those documents, so it is relatively expensive: prefer the deterministic listing and retrieval tasks (`help_list_repos`, `help_list_repo_documents`, `help_get_repo_document`) in automated checks.
+
+Because the task drives an agent through the Scout-AI agent helper, it needs the agent machinery available in the calling context; in a plain workflow process without that tooling the run fails early.
 
 In practice this is a good first stop when an agent has a broad question such as where to learn about workflows, entities, TSV processing, command execution, or LLM integration. The answer should help narrow the search before calling `help_get_repo_document` on specific files.
 
 ## help_workflow
 Return the markdown documentation for a workflow
 
-The `workflow` input names any workflow that can be loaded through `Workflow.require_workflow`. The task then calls `documentation_markdown` on that workflow and returns the result as markdown text.
+The `workflow` input names any workflow that can be loaded through `Workflow.require_workflow`. The task loads it with network autoinstall disabled (so it must already be available locally) and returns its `documentation_markdown`: the `workflow.md` or `README.md` found next to the workflow `libdir`, as markdown text.
 
-This is useful both for introspection and for tool discovery. For example, an agent can read the documentation for `ScoutCoder` itself, inspect the inherited `ComputerUse` workflow, or query the docs of another installed workflow before interacting with it.
+This is useful both for introspection and for tool discovery. For example, an agent can read the documentation for `ScoutCoder` itself or query the docs of another installed workflow before interacting with it.
 
 ## help_list_workflows
 List the workflows installed and available to ScoutCoder
 
-This task unions `Workflow.installed_workflows`, a purely local scan of the `workflows` pathmap that never triggers network autoinstall, with the workflow modules already loaded in the current process. The combined list is deduplicated and sorted.
+This task unions `Workflow.installed_workflows`, a purely local scan of the `workflows` pathmap that never triggers network autoinstall, with the workflow modules already loaded in the current process. The combined list is deduplicated and sorted, and the local scan is wrapped in a rescue so the task never crashes.
 
 It is the discovery step for workflow names: any name it returns is usable as the `repo` input of `help_list_repo_documents` and `help_get_repo_document`, which then read the workflow's own `README.md`, `doc*/`, and `research/` documentation.

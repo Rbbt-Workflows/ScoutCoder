@@ -1,11 +1,20 @@
 require 'json'
 require 'ripper'
+require 'fileutils'
 
 module ScoutCoder
   # Keep export choice resolution and emitted DSL source directly testable
   # without invoking define_task's filesystem-writing behavior.
   module TaskDefinition
     module_function
+
+    # Resolve the authored-task directory robustly: it may not exist in a clean checkout.
+    def resolve_task_directory(path)
+      FileUtils.mkdir_p(path)
+      File.realpath(path)
+    rescue SystemCallError => error
+      raise ParameterException, "define_task validation failed [task_directory]: cannot prepare share/tasks: #{error.message}"
+    end
 
     # Resolve the export declaration for a generated task. `export_mode` is a
     # deprecated compatibility alias: it applies only when export_type is
@@ -225,11 +234,7 @@ module ScoutCoder
       raise ParameterException, 'define_task validation failed [source]: definition must be non-empty Ruby source'
     end
 
-    task_dir = begin
-      File.realpath(File.expand_path('../../../share/tasks', __dir__))
-    rescue SystemCallError => error
-      raise ParameterException, "define_task validation failed [task_directory]: cannot resolve share/tasks: #{error.message}"
-    end
+    task_dir = TaskDefinition.resolve_task_directory(File.expand_path('../../../share/tasks', __dir__))
     target = File.expand_path("#{name}.rb", task_dir)
     unless File.dirname(target) == task_dir && File.basename(target) == "#{name}.rb"
       raise ParameterException, 'define_task validation failed [path]: task file must remain directly within share/tasks'

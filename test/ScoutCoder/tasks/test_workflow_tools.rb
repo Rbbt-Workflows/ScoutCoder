@@ -94,8 +94,12 @@ class TestWorkflowTools < Test::Unit::TestCase
       ensure
         path = File.expand_path("share/tasks/#{name}.rb", Dir.pwd)
         File.delete(path) if name && File.file?(path)
+        Dir.rmdir('share/tasks') if Dir.exist?('share/tasks') && Dir.empty?('share/tasks')
       end
+
+
     RUBY
+
     stdout, stderr, status = Open3.capture3(RbConfig.ruby, '-Ilib', '-e', script,
                                              name, definition,
                                              chdir: File.expand_path('../../..', __dir__))
@@ -105,6 +109,15 @@ class TestWorkflowTools < Test::Unit::TestCase
     assert_equal 'passed', result.dig('validation', 'load')
     assert_equal 'passed', result.dig('validation', 'registration')
     refute File.file?(File.expand_path("../../../share/tasks/#{name}.rb", __dir__))
+  end
+
+  def test_define_task_directory_is_created_when_missing
+    Dir.mktmpdir('scoutcoder-task-directory') do |root|
+      task_directory = File.join(root, 'share', 'tasks')
+      assert_false File.exist?(task_directory)
+      assert_equal task_directory, ScoutCoder::TaskDefinition.resolve_task_directory(task_directory)
+      assert File.directory?(task_directory)
+    end
   end
 
   def test_define_task_wraps_reload_failure_and_keeps_candidate
@@ -129,8 +142,12 @@ class TestWorkflowTools < Test::Unit::TestCase
       ensure
         path = File.expand_path("share/tasks/#{name}.rb", Dir.pwd)
         File.delete(path) if name && File.file?(path)
+        Dir.rmdir('share/tasks') if Dir.exist?('share/tasks') && Dir.empty?('share/tasks')
       end
+
+
     RUBY
+
     stdout, stderr, status = Open3.capture3(RbConfig.ruby, '-Ilib', '-e', script,
                                              name, definition,
                                              chdir: File.expand_path('../../..', __dir__))
