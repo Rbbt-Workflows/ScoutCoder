@@ -15,11 +15,11 @@ ScoutCoder=/$PWD filter="*.rb *.rake Rakefile *.rdoc *.R *.sh *.js *.haml *.sass
 
   version_2.helpers
   version_2.entities
+  version_2.python
 
  }
  lib=lib {
   ScoutCoder=ScoutCoder{
-   LiveWorkflow.rb
    helper_test_support.rb
    task_test_support.rb
    tasks=tasks{
