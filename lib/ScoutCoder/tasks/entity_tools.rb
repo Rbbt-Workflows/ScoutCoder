@@ -23,15 +23,18 @@ module ScoutCoder
       name.split('_').map(&:capitalize).join
     end
 
-    def entity_directory(root, *parts)
-      base = File.expand_path(File.join(root, 'lib', 'ScoutCoder', 'entity'))
+    def target_file(root, *parts)
+      base = File.expand_path(File.join(root, 'share', 'entities'))
       target = File.expand_path(File.join(base, *parts))
-      raise ArgumentError, "target path escapes lib/ScoutCoder/entity directory: #{target}" unless target == base || target.start_with?(base + File::SEPARATOR)
+      raise ArgumentError, "target path escapes share/entities directory: #{target}" unless target.start_with?(base + File::SEPARATOR)
       target
     end
 
-    def target_file(root, *parts)
-      File.join(entity_directory(root, *parts[0...-1]), parts.last)
+    def property_file(root, entity_name, property_name)
+      base = File.expand_path(File.join(root, 'share', 'entity_properties'))
+      target = File.expand_path(File.join(base, entity_name, "#{property_name}.rb"))
+      raise ArgumentError, "target path escapes share/entity_properties directory: #{target}" unless target.start_with?(base + File::SEPARATOR)
+      target
     end
 
     def identifier_file(root, name)
@@ -169,44 +172,73 @@ module ScoutCoder
     def entity_source(name, base, definition, identifiers: false)
       constant = constant_name(name)
       identifier_source = if identifiers
-                            "  add_identifiers Path.setup(File.expand_path('../../../share/entity/#{name}.identifiers.tsv', __dir__))\n"
+                            "  add_identifiers Path.setup(File.expand_path('../entity/#{name}.identifiers.tsv', __dir__))\n"
                           else
                             ''
                           end
       <<~RUBY
-        module ScoutCoder
-          module #{constant}
-            extend #{base}
-        #{identifier_source}#{definition.lines.map { |line| "    #{line}" }.join.rstrip}
-          end
+        module ::#{constant}
+          extend #{base}
+        #{identifier_source}#{definition.lines.map { |line| "  #{line}" }.join.rstrip}
         end
       RUBY
     end
 
-    def property_source(name, definition)
+    def property_source(entity_name, definition)
       <<~RUBY
-        module ScoutCoder
-          module #{constant_name(name)}
-        #{definition.lines.map { |line| "    #{line}" }.join.rstrip}
-          end
+        module ::#{constant_name(entity_name)}
+        #{definition.lines.map { |line| "  #{line}" }.join.rstrip}
         end
       RUBY
     end
 
-    def reload!(target, label)
-      workflow_file = File.join(project_root, 'workflow.rb')
+    def reload!(target, label, root = project_root)
+      workflow_file = File.join(root, 'workflow.rb')
       begin
-        Dir.chdir(project_root) { Workflow.require_workflow(workflow_file, update: true) }
+        root = File.expand_path(root)
+        workflow = Workflow.workflows.find do |candidate|
+          candidate.respond_to?(:libdir) && candidate.libdir &&
+            File.expand_path(candidate.libdir.to_s) == root
+        end
+        unless workflow
+          raise LoadError, "workflow entrypoint not found: #{workflow_file}" unless File.file?(workflow_file)
+          require 'pathname'
+          workflow = Dir.chdir(root) { Workflow.require_workflow_file(Pathname.new(workflow_file)) }
+          workflow = Workflow.workflows.find do |candidate|
+            candidate.respond_to?(:libdir) && candidate.libdir &&
+              File.expand_path(candidate.libdir.to_s) == root
+          end || workflow
+        end
+        workflow.load_live_files! if workflow.respond_to?(:load_live_files!)
+        workflow
       rescue StandardError, ScriptError => error
         raise ArgumentError, "#{label} reload failed after writing candidate #{target}; workflow entrypoint #{workflow_file} raised #{error.class}: #{error.message}"
       end
     end
 
-    def scoutcoder_entity(name)
+    def workflow_root(workflow)
+      raise ArgumentError, "workflow '#{workflow}' has no checkout libdir" if workflow.nil? || workflow.libdir.nil? || workflow.libdir.to_s.empty?
+      File.expand_path(workflow.libdir.to_s)
+    end
+
+    def scoutcoder_entity(name, root = project_root)
       constant = constant_name(name)
-      raise ArgumentError, "entity registration failed: ScoutCoder::#{constant} is not defined" unless ScoutCoder.const_defined?(constant, false)
-      entity = ScoutCoder.const_get(constant, false)
-      raise ArgumentError, "entity registration failed: ScoutCoder::#{constant} is not an Entity" unless defined?(Entity) && Entity === entity && entity.respond_to?(:properties)
+      if Object.const_defined?(constant, false)
+        entity = Object.const_get(constant, false)
+        unless defined?(Entity) && Entity === entity && entity.respond_to?(:properties)
+          raise ArgumentError, "entity registration failed: ::#{constant} is not an Entity"
+        end
+        return entity
+      end
+
+      constant = constant_name(name)
+      candidate = File.join(root, 'share', 'entities', "#{name}.rb")
+      if File.file?(candidate)
+        load candidate
+      end
+      raise ArgumentError, "entity registration failed: ::#{constant} is not defined" unless Object.const_defined?(constant, false)
+      entity = Object.const_get(constant, false)
+      raise ArgumentError, "entity registration failed: ::#{constant} is not an Entity" unless defined?(Entity) && Entity === entity && entity.respond_to?(:properties)
       entity
     end
 
@@ -258,10 +290,10 @@ module ScoutCoder
 
     def entity_source_metadata(entity, root)
       constant = entity.name.to_s.split('::').last
-      entity_dir = File.join(root, 'lib', 'ScoutCoder', 'entity')
+      entity_dir = File.join(root, 'share', 'entities')
       definition_files = File.directory?(entity_dir) ? Dir.glob(File.join(entity_dir, '*.rb')).sort.select { |path| constant_name(File.basename(path, '.rb')) == constant } : []
       name = definition_files.empty? ? entity_name_from_constant(constant) : File.basename(definition_files.first, '.rb')
-      property_dir = File.join(entity_dir, name)
+      property_dir = File.join(root, 'share', 'entity_properties', name)
       property_files = File.directory?(property_dir) ? Dir.glob(File.join(property_dir, '**', '*.rb')).sort : []
       { name: name, definition: definition_files.empty? ? nil : checkout_path(definition_files.first, root),
         property_files: property_files.map { |path| checkout_path(path, root) } }
@@ -287,16 +319,25 @@ module ScoutCoder
   input :definition, :text, 'Trusted Ruby source for the entity body (annotations, helpers, and other declarations; do not include the module or extend line)', nil, required: true
   input :base, :string, 'Entity base: Entity (default) or EntityWorkflow', 'Entity'
   input :identifiers, :text, 'Optional TSV file contents; written to share/entity/<entity>.identifiers.tsv and registered at load time', nil
-  task :define_entity => :json do |entity_name, definition, base, identifiers|
+  input :workflow, :string, 'Workflow whose share/entities directory receives the entity', 'ScoutCoder'
+  task :define_entity => :json do |entity_name, definition, base, identifiers, workflow|
     begin
       name = EntityDefinitionSupport.validate_name(entity_name, 'entity name')
       raise ArgumentError, 'definition must be non-empty Ruby source' unless definition.is_a?(String) && !definition.strip.empty?
       selected_base = EntityDefinitionSupport::BASES[base.to_s]
       raise ArgumentError, "base must be one of #{EntityDefinitionSupport::BASES.keys.join(', ')}" unless selected_base
       raise ArgumentError, 'definition body must not extend Entity or EntityWorkflow; select the base with the base input' if EntityDefinitionSupport.entity_extension?(definition)
-      root = EntityDefinitionSupport.project_root
+      target_workflow = managed_workflow(workflow)
+      root = EntityDefinitionSupport.workflow_root(target_workflow)
+      workflow_name = target_workflow.to_s
       constant = EntityDefinitionSupport.constant_name(name)
-      raise ArgumentError, "entity ScoutCoder::#{constant} is already registered; refusing to redefine it" if ScoutCoder.const_defined?(constant, false)
+      if Object.const_defined?(constant, false)
+        existing = Object.const_get(constant, false)
+        unless defined?(Entity) && Entity === existing && existing.respond_to?(:properties)
+          raise ArgumentError, "constant ::#{constant} is already defined and is not an Entity; refusing to redefine it"
+        end
+        # Existing top-level entities are augmented by adding share/entity_properties files.
+      end
       entity_path = EntityDefinitionSupport.target_file(root, "#{name}.rb")
       identifiers_path = identifiers.nil? ? nil : EntityDefinitionSupport.identifier_file(root, name)
       raise ArgumentError, 'identifiers must be non-empty TSV text when supplied' if identifiers_path && (!identifiers.is_a?(String) || identifiers.empty?)
@@ -318,9 +359,12 @@ module ScoutCoder
         File.delete(identifiers_path) if identifiers_path && File.file?(identifiers_path)
         raise
       end
-      EntityDefinitionSupport.reload!(entity_path, 'define_entity')
-      EntityDefinitionSupport.scoutcoder_entity(name)
-      { entity: name, constant: "ScoutCoder::#{constant}", base: selected_base, path: entity_path, identifiers_path: identifiers_path,
+      EntityDefinitionSupport.reload!(entity_path, 'define_entity', root)
+      entity = EntityDefinitionSupport.scoutcoder_entity(name, root)
+      unless Object.const_defined?(constant, false) && Object.const_get(constant, false).equal?(entity)
+        raise ArgumentError, "entity registration failed: ::#{constant} is not defined at top level"
+      end
+      { entity: name, constant: "::#{constant}", workflow: workflow_name, base: selected_base, path: entity_path, identifiers_path: identifiers_path,
         bytes: source.bytesize, validation: { entity_name: 'passed', source: 'passed', base: 'passed', syntax: 'passed', load: 'passed', registration: 'passed' },
         written: true, overwritten: false }
     rescue ArgumentError => error
@@ -332,24 +376,38 @@ module ScoutCoder
   input :entity_name, :string, 'Existing ScoutCoder entity identifier', nil, required: true
   input :property_name, :string, 'Property identifier (lowercase letters, digits and underscores; starts with a letter)', nil, required: true
   input :definition, :text, 'Trusted Ruby source containing property :<property_name> declaration', nil, required: true
-  task :define_entity_property => :json do |entity_name, property_name, definition|
+  input :workflow, :string, 'Workflow whose share/entity_properties directory receives the property', 'ScoutCoder'
+  task :define_entity_property => :json do |entity_name, property_name, definition, workflow|
     begin
       name = EntityDefinitionSupport.validate_name(entity_name, 'entity name')
       property = EntityDefinitionSupport.validate_name(property_name, 'property name')
       raise ArgumentError, 'definition must be non-empty Ruby source' unless definition.is_a?(String) && !definition.strip.empty?
       raise ArgumentError, "definition must contain a property :#{property} declaration (not only a comment or string)" unless EntityDefinitionSupport.property_declaration?(definition, property)
-      root = EntityDefinitionSupport.project_root
-      entity = EntityDefinitionSupport.scoutcoder_entity(name)
-      raise ArgumentError, "property :#{property} is already registered on ScoutCoder::#{EntityDefinitionSupport.constant_name(name)}; refusing to redefine it" if (entity.properties || {}).keys.map(&:to_s).include?(property)
-      property_path = EntityDefinitionSupport.target_file(root, name, "#{property}.rb")
+      target_workflow = managed_workflow(workflow)
+      root = EntityDefinitionSupport.workflow_root(target_workflow)
+      constant = EntityDefinitionSupport.constant_name(name)
+      unless Object.const_defined?(constant, false)
+        target_workflow = managed_workflow(workflow)
+        EntityDefinitionSupport.reload!(File.join(EntityDefinitionSupport.workflow_root(target_workflow), 'workflow.rb'), 'define_entity_property', EntityDefinitionSupport.workflow_root(target_workflow))
+      end
+      raise ArgumentError, "entity ::#{constant} is not defined; define or load it before adding a property" unless Object.const_defined?(constant, false)
+      # Properties are attached to the top-level Entity module, while their
+      # source file belongs to the selected workflow's share tree. The entity
+      # may have been originally defined by a different checkout.
+      entity = EntityDefinitionSupport.scoutcoder_entity(name, root)
+      raise ArgumentError, "property :#{property} is already registered on ::#{EntityDefinitionSupport.constant_name(name)}; refusing to redefine it" if (entity.properties || {}).keys.map(&:to_s).include?(property)
+      property_path = EntityDefinitionSupport.property_file(root, name, property)
       EntityDefinitionSupport.no_existing_file!(property_path, 'entity property definition')
       source = EntityDefinitionSupport.property_source(name, definition)
       EntityDefinitionSupport.compile!(source, property_path, 'entity property')
       EntityDefinitionSupport.write_exclusive(property_path, source, 'entity property definition')
-      EntityDefinitionSupport.reload!(property_path, 'define_entity_property')
-      entity = EntityDefinitionSupport.scoutcoder_entity(name)
-      raise ArgumentError, "property registration failed: ScoutCoder::#{EntityDefinitionSupport.constant_name(name)}.properties does not include :#{property}" unless (entity.properties || {}).keys.map(&:to_s).include?(property)
-      { entity: name, property: property, path: property_path, bytes: source.bytesize,
+      EntityDefinitionSupport.reload!(property_path, 'define_entity_property', root)
+      entity = EntityDefinitionSupport.scoutcoder_entity(name, root)
+      raise ArgumentError, "property registration failed: ::#{EntityDefinitionSupport.constant_name(name)}.properties does not include :#{property}" unless (entity.properties || {}).keys.map(&:to_s).include?(property)
+      unless Object.const_defined?(constant, false) && Object.const_get(constant, false).equal?(entity)
+        raise ArgumentError, "property registration failed: ::#{constant} is not defined at top level"
+      end
+      { entity: name, property: property, workflow: target_workflow.to_s, path: property_path, bytes: source.bytesize,
         validation: { entity_name: 'passed', property_name: 'passed', source: 'passed', declaration: 'passed', syntax: 'passed', load: 'passed', registration: 'passed' },
         written: true, overwritten: false }
     rescue ArgumentError => error

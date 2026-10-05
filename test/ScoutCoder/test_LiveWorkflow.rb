@@ -1,5 +1,4 @@
 require File.expand_path(__FILE__).sub(%r(/test/.*), '/test/test_helper.rb')
-require File.expand_path(__FILE__).sub(%r(.*/test/), '').sub(/test_(.*)\.rb/, '\1')
 require 'fileutils'
 require 'securerandom'
 
@@ -33,11 +32,11 @@ class TestLiveWorkflow < Test::Unit::TestCase
     File.write(File.join(root, 'workflow.rb'), <<~RUBY)
       require 'scout'
       $LOAD_PATH.unshift(#{LIB.inspect}) unless $LOAD_PATH.include?(#{LIB.inspect})
-      require 'ScoutCoder/LiveWorkflow'
+      require 'scout/workflow/live'
 
       module #{module_name}
         extend Workflow
-        extend ScoutCoder::LiveWorkflow
+        extend ::LiveWorkflow
       end
     RUBY
     root
@@ -75,7 +74,7 @@ class TestLiveWorkflow < Test::Unit::TestCase
     assert_include workflow.tasks.keys, :lw_one
     refute workflow.tasks.key?(:lw_two)
     File.write(File.join(root, 'share/tasks/two.rb'), task_source(name, :lw_two))
-    # Re-evaluating workflow.rb re-extends ScoutCoder::LiveWorkflow, which
+    # Re-evaluating workflow.rb re-extends ::LiveWorkflow, which
     # re-fires self.extended and therefore reloads the share drafts. This is
     # also the empirical proof that Module#extended re-fires on re-extend:
     # load_live_files! is never called here.
@@ -107,7 +106,7 @@ class TestLiveWorkflow < Test::Unit::TestCase
       'share/entities/gamma.rb' => "module #{entity}\n  extend Entity\nend\n",
       'share/entity_properties/gamma.rb' => "module #{entity}\n  property :lw_prop do 'prop ok' end\nend\n")
     workflow = require_scratch(root)
-    ordered = ScoutCoder::LiveWorkflow.ordered_share_files(workflow)
+    ordered = ::LiveWorkflow.ordered_share_files(workflow)
     entity_index = ordered.index { |file| file.end_with?(File.join('share', 'entities', 'gamma.rb')) }
     property_index = ordered.index { |file| file.end_with?(File.join('share', 'entity_properties', 'gamma.rb')) }
     assert_not_nil entity_index
@@ -141,7 +140,7 @@ class TestLiveWorkflow < Test::Unit::TestCase
       'share/test/task/poison.rb' => "raise 'must not load'\n",
       'share/test/helper/poison.rb' => "raise 'must not load'\n")
     workflow = require_scratch(root)
-    ordered = ScoutCoder::LiveWorkflow.ordered_share_files(workflow)
+    ordered = ::LiveWorkflow.ordered_share_files(workflow)
     assert_equal 5, ordered.length
     ordered.each do |file|
       assert_match(%r{/share/(tasks|helpers|entities|entity_properties)/}, file)
@@ -208,7 +207,7 @@ class TestLiveWorkflow < Test::Unit::TestCase
     File.delete(File.join(root, 'share/tasks/one.rb'))
     assert_nothing_raised { workflow.load_live_files! }
     assert_include workflow.tasks.keys, :lw_two
-    remaining = ScoutCoder::LiveWorkflow.ordered_share_files(workflow)
+    remaining = ::LiveWorkflow.ordered_share_files(workflow)
     assert_not_include remaining, File.join(root, 'share/tasks/one.rb')
     # lw_one may survive in memory for the process lifetime (documented Ruby
     # limitation); only no-error and continued loading are guaranteed.

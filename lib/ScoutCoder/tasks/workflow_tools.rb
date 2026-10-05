@@ -32,8 +32,8 @@ module ScoutCoder
       export_type
     end
 
-    def source(name, definition, export_type)
-      source = "module ScoutCoder\n\n#{definition.rstrip}\n"
+    def source(name, definition, export_type, workflow_name = 'ScoutCoder')
+      source = "module #{workflow_name}\n\n#{definition.rstrip}\n"
       source += "\n#{export_type} :#{name}\n" if export_type
       source + "\nend\n"
     end
@@ -44,7 +44,32 @@ module ScoutCoder
   # Workflow.require_workflow and run using the workflow's normal Step API.
   helper :managed_workflow do |workflow|
     raise ParameterException, 'workflow is required' if workflow.nil? || workflow.to_s.strip.empty?
-    workflow.to_s == 'ScoutCoder' ? ScoutCoder : Workflow.require_workflow(workflow.to_s)
+    return ScoutCoder if workflow.to_s == 'ScoutCoder'
+    loaded = Workflow.workflows.find { |candidate| candidate.to_s == workflow.to_s }
+    return loaded if loaded
+
+    # A workflow object may already be registered under a namespace-qualified
+    # name while callers use its checkout's short directory name. Prefer the
+    # existing checkout before asking Workflow to autoload by constant name.
+    candidate_path = File.expand_path(workflow.to_s)
+    if !File.exist?(candidate_path)
+      project_root = File.expand_path('../../..', __dir__)
+      local_candidate = File.join(project_root, 'tmp', 'workflows', workflow.to_s)
+      candidate_path = local_candidate if File.directory?(local_candidate)
+    end
+    workflow_file = File.directory?(candidate_path) ? File.join(candidate_path, 'workflow.rb') : candidate_path
+    if File.file?(workflow_file)
+      require 'pathname'
+      candidate_root = File.dirname(workflow_file)
+      loaded_from_root = Workflow.workflows.find do |candidate|
+        candidate.respond_to?(:libdir) && candidate.libdir && candidate_root == File.expand_path(candidate.libdir.to_s)
+      end
+      return loaded_from_root if loaded_from_root
+      return Workflow.require_workflow_file(Pathname.new(workflow_file))
+    end
+    loaded = Workflow.workflows.find { |candidate| candidate.to_s == workflow.to_s }
+    return loaded if loaded
+    Workflow.require_workflow(workflow.to_s)
   end
 
   helper :managed_task do |workflow, task|
@@ -221,7 +246,8 @@ module ScoutCoder
   input :task_name, :string, 'New task identifier (lowercase letters, digits and underscores; starts with a letter)', nil, required: true
   input :definition, :text, 'Ruby task DSL source: desc/input declarations and a task declaration matching task_name', nil, required: true
   input :export_type, :string, 'Optionally export the generated task with export or export_exec (none to omit)', 'export'
-  task :define_task => :json do |task_name, definition, export_type|
+  input :workflow, :string, 'Workflow whose share/tasks directory receives the task', 'ScoutCoder'
+  task :define_task => :json do |task_name, definition, export_type, workflow|
     name = task_name.to_s
     unless name.match?(/\A[a-z][a-z0-9_]*\z/)
       raise ParameterException, "define_task validation failed [task_name]: invalid task name '#{name}'; expected [a-z][a-z0-9_]*"
@@ -234,12 +260,20 @@ module ScoutCoder
       raise ParameterException, 'define_task validation failed [source]: definition must be non-empty Ruby source'
     end
 
-    task_dir = TaskDefinition.resolve_task_directory(File.expand_path('../../../share/tasks', __dir__))
-    target = File.expand_path("#{name}.rb", task_dir)
+    target_workflow = managed_workflow(workflow)
+    workflow_name = target_workflow.to_s
+    unless workflow_name.match?(/\A[A-Z][A-Za-z0-9_:]*\z/)
+      raise ParameterException, "define_task validation failed [workflow]: invalid workflow module name #{workflow_name.inspect}"
+    end
+    workflow_root = File.expand_path(target_workflow.libdir.to_s)
+    raise ParameterException, "define_task validation failed [workflow]: workflow '#{workflow_name}' has no checkout libdir" if target_workflow.libdir.nil?
+    task_dir = File.join(workflow_root, 'share', 'tasks')
+    FileUtils.mkdir_p(task_dir)
+    target = File.join(task_dir, name + '.rb')
     unless File.dirname(target) == task_dir && File.basename(target) == "#{name}.rb"
       raise ParameterException, 'define_task validation failed [path]: task file must remain directly within share/tasks'
     end
-    if File.exist?(target) || File.symlink?(target)
+    if Open.exist?(target) || File.symlink?(target)
       raise ParameterException, "define_task validation failed [no_overwrite]: task file already exists: #{target}; refusing to overwrite"
     end
 
@@ -260,7 +294,7 @@ module ScoutCoder
       raise ParameterException, "define_task validation failed [declaration]: source must contain a Ruby task :#{name} declaration (not only a comment or string)"
     end
 
-    source = TaskDefinition.source(name, definition, export_type)
+    source = TaskDefinition.source(name, definition, export_type, workflow_name)
     unless defined?(RubyVM::InstructionSequence)
       raise ParameterException, 'define_task validation failed [syntax]: RubyVM::InstructionSequence is unavailable; refusing to write unchecked Ruby source'
     end
@@ -279,9 +313,10 @@ module ScoutCoder
       raise ParameterException, "define_task write failed [write]: #{error.message}"
     end
 
-    workflow_file = File.expand_path('../../../workflow.rb', __dir__)
+    workflow_file = File.join(workflow_root, 'workflow.rb')
     begin
-      reloaded_workflow = Workflow.require_workflow(workflow_file, update: true)
+      require 'pathname'
+      reloaded_workflow = Dir.chdir(workflow_root) { Workflow.require_workflow_file(Pathname.new(workflow_file)) }
     rescue StandardError, ScriptError => error
       raise ParameterException,
             "define_task reload failed after writing candidate #{target}; " \
@@ -296,7 +331,7 @@ module ScoutCoder
             "workflow #{workflow_file} did not register :#{name}. Available tasks: #{available}"
     end
 
-    { task: name, path: target, bytes: source.bytesize,
+    { task: name, workflow: workflow_name, path: target, bytes: source.bytesize,
       validation: { task_name: 'passed', source: 'passed', declaration: 'passed',
                     syntax: 'passed', load: 'passed', registration: 'passed',
                     inspection: 'passed', registration_validation: 'passed' },

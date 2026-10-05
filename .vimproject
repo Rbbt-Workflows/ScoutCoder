@@ -17,14 +17,18 @@ ScoutCoder=/$PWD filter="*.rb *.rake Rakefile *.rdoc *.R *.sh *.js *.haml *.sass
   version_2.entities
   version_2.python
 
+  version_2.current
+  version_2.current.analyze
+
  }
  lib=lib {
   ScoutCoder=ScoutCoder{
    helper_test_support.rb
    task_test_support.rb
    tasks=tasks{
-    document_task.rb
     documentation.rb
+
+    document_task.rb
     entity_tools.rb
     helper_tools.rb
     list_entities.rb

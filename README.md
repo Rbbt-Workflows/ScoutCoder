@@ -73,19 +73,20 @@ Open.consume_stream io
 
 - `workflow.rb` - workflow entrypoint. It requires the lib task files, then
   loads this checkout's built-in entity definitions from
-  `lib/ScoutCoder/entity/*.rb`, then `extend ScoutCoder::LiveWorkflow`
-  (which loads the authoring drafts under `share/`), and finally the built-in
+  `lib/ScoutCoder/entity/*.rb`, then re-extends the global `::LiveWorkflow`
+  module (which loads authoring drafts under `share/`), and finally the built-in
   entity property files under `lib/ScoutCoder/entity/<entity>/**/*.rb`. This
   combined order guarantees every entity extend happens before any property
   registration, from either source.
 - `lib/ScoutCoder/` - shipped functionality: task definitions under
-  `lib/ScoutCoder/tasks/`, the `LiveWorkflow` module, the built-in entity
-  tree under `lib/ScoutCoder/entity/`, and the shared test-support modules
+  `lib/ScoutCoder/tasks/`, the built-in entity tree under
+  `lib/ScoutCoder/entity/`, and the shared test-support modules
   (`task_test_support.rb`, `helper_test_support.rb`).
 - `share/` - the authoring-drafts convention. `share/tasks/`,
   `share/helpers/`, `share/entities/` and `share/entity_properties/` hold
-  draft definitions loaded live by `LiveWorkflow` on every workflow reload,
-  in ScoutCoder's own checkout and in any other workflow that extends it.
+  draft definitions loaded live by Scout-gear's `LiveWorkflow` on every
+  workflow reload, in ScoutCoder's own checkout and in any other workflow
+  that extends it.
   ScoutCoder's own four draft directories are currently empty, so extending
   is a no-op here today.
 - `share/test/task/` and `share/test/helper/` - the paired tests for
@@ -104,33 +105,13 @@ Open.consume_stream io
 
 ## LiveWorkflow
 
-`ScoutCoder::LiveWorkflow` (in `lib/ScoutCoder/LiveWorkflow.rb`) is the
-mechanism that makes `share/` authoring drafts live. A target workflow that
-extends it gets every `*.rb` draft under its own `share/` loaded on each
-(re)evaluation of its `workflow.rb`, so tasks, helpers and entity drafts
-register on the workflow without any manual load block. ScoutCoder extends it
-itself, which is how its own drafts would be picked up.
-
-Usage in a target workflow (this is the same generated pattern the
-LiveWorkflow test suite builds; only the path to ScoutCoder's lib changes):
-
-```ruby
-require 'scout'
-
-scoutcoder_lib = File.expand_path('../../ScoutCoder/lib', __dir__)
-$LOAD_PATH.unshift(scoutcoder_lib) unless $LOAD_PATH.include?(scoutcoder_lib)
-require 'ScoutCoder/LiveWorkflow'
-
-module MyWorkflow
-  extend Workflow
-  extend ScoutCoder::LiveWorkflow
-end
-```
-
-The two `extend` lines are the whole integration: `Workflow` first, then
-`LiveWorkflow`. The required file defines `module ScoutCoder` with the
-`LiveWorkflow` submodule, so it can be loaded from any checkout whose
-`lib/ScoutCoder` is on the load path.
+`LiveWorkflow` is Scout's workflow extension implemented in scout-gear at
+`scout/workflow/live.rb`. A target workflow that extends it gets every `*.rb`
+draft under its own `share/` loaded on each (re)evaluation of `workflow.rb`,
+so tasks, helpers and entity drafts register without a manual load block. A
+target workflow extends `Workflow` and the global `::LiveWorkflow` module; the
+Scout-gear implementation is loaded through the project's normal load path.
+ScoutCoder's `workflow.rb` re-extends this shared Scout extension.
 
 Load order, on every pass: `share/tasks`, `share/helpers`,
 `share/entities`, `share/entity_properties` - top-level files of each
@@ -138,14 +119,13 @@ subdirectory before nested ones, lexicographic within a level, so loads are
 deterministic. Entity files always precede property files, because
 re-extending `Entity` resets property metadata: a property file loaded before
 its entity file ends up unregistered. That ordering is a contract, not an
-implementation detail. ScoutCoder's own `workflow.rb` relies on the same
-rule across sources: lib entities load, then `extend LiveWorkflow` (which
-loads share entities and share properties), then lib properties, so every
-entity extend precedes every property registration whether the entity or the
-property comes from `lib/` or from `share/`.
+implementation detail. ScoutCoder's `workflow.rb` relies on the same rule across sources: lib entity
+files load, then `LiveWorkflow` loads share entity and property drafts, then
+lib property files load. Thus every entity extend precedes property
+registration, whether the entity or property comes from `lib/` or `share/`.
 
-Reload semantics. `extend ScoutCoder::LiveWorkflow` re-fires `self.extended`
-on every re-extension, and `Workflow.require_workflow(file, update: true)`
+Reload semantics. Re-extending the global `::LiveWorkflow` module fires
+`self.extended`. `Workflow.require_workflow(file, update: true)`
 re-evaluates `workflow.rb`, so adding or editing a draft file and reloading
 the workflow picks up the change without restarting. Files are loaded with
 Kernel#load, not require, so they re-execute every time. For the
@@ -154,11 +134,13 @@ loaded-but-not-re-evaluated case (a workflow object already in memory), call
 extended hook. Re-loading never raises on re-declaration: tasks reassign,
 helpers redefine, and re-extending Entity is expected behavior.
 
-Draft files must wrap themselves in their workflow module (`module MyWorkflow
-... end`), because `Kernel#load` always evaluates the file at top level with
-`self` set to main; `module_eval { load file }` cannot change that. This is
-also the convention of the `define_task` and `define_helper` generators, so
-generated drafts follow it automatically.
+Hand-authored task and helper draft files loaded by `LiveWorkflow` must wrap
+declarations in the target workflow module (`module MyWorkflow ... end`),
+because `Kernel#load` evaluates each file at top level. Entity and property
+drafts follow their distinct module/body formats described below. The
+`define_task` and `define_helper` generators instead add the enclosing module
+to their supplied declarations. `define_entity` and `define_entity_property`
+wrap their respective supplied sources in the entity module.
 
 Exclusions and tolerance:
 
@@ -176,34 +158,65 @@ Exclusions and tolerance:
 ## Authoring ScoutCoder entities
 
 ScoutCoder can create entity modules and their properties in this checkout under
-`lib/ScoutCoder/entity/`. Use
-`define_entity` to create a module and `define_entity_property` to add one
-property at a time. Entity names and property names must match
-`[a-z][a-z0-9_]*`; an entity name such as `sample_entity` maps to
-`ScoutCoder::SampleEntity`. The entity base defaults to `Entity`; choose
-`EntityWorkflow` explicitly when the module should also expose workflow
-behavior. The definition inputs are trusted Ruby source bodies: do not include
-the generated `module ScoutCoder`, entity module, or `extend Entity` /
-`extend EntityWorkflow` wrapper (supplying an `extend Entity` /
-`extend EntityWorkflow` call inside the body is rejected; select the base with
-the `base` input). For a property, include its matching
-`property :<property_name>` declaration in the body.
+`share/entities/` and `share/entity_properties/`. Use `define_entity` to create a
+module and `define_entity_property` to add one property at a time. These are
+authoring drafts loaded by Scout-gear's `LiveWorkflow` extension; the shipped
+built-in entity tree is separately located under `lib/ScoutCoder/entity/`.
 
-For example, these calls define an entity and then add its property:
+Entity names and property names must match `[a-z][a-z0-9_]*`; an entity name
+such as `sample_entity` maps to the top-level `::SampleEntity` module. The entity
+base defaults to `Entity`; choose `EntityWorkflow` explicitly when the module
+should also expose workflow behavior. The `definition` inputs are trusted Ruby
+source bodies, not complete module files. `define_entity` generates the entity
+module and its `extend Entity` (or `extend EntityWorkflow`) line; it also adds
+identifier registration when the `identifiers` input is supplied. Do not
+include the module, entity constant, or base-extension wrapper in `definition`:
+an `extend Entity` or `extend EntityWorkflow` call there is rejected. Select the
+base with `base`. These generators supply entity scaffolding; a normal entity
+file loaded directly by `LiveWorkflow` must supply its own module and extension
+lines. For `define_entity_property`, supply a matching
+`property :<property_name> => :<dispatch_type> do |args...| ... end` declaration
+and body; the generator wraps that source in the existing entity module. The
+tool requires the matching `property` declaration but does not infer its
+dispatch type, block arguments, or action. `define_entity` writes
+`share/entities/<entity>.rb`; `define_entity_property` writes
+`share/entity_properties/<entity>/<property>.rb`.
+
+A complete module listing may be useful for understanding the result, but it
+is not valid `definition` input. The conceptual generated form below shows
+what `base: 'EntityWorkflow'` and `identifiers:` request; it is not a standalone
+source template. The entity body is not a full module to paste into `definition`; the
+identifiers call is generated only when TSV content is provided.
 
 ```ruby
-entity_definition = <<~'RUBY'
+# Illustrative only: the generator uses a qualified module wrapper,
+# and emits add_identifiers only when identifiers are supplied.
+module SampleEntity
+  extend EntityWorkflow
+  add_identifiers Path.setup(File.expand_path('../entity/sample_entity.identifiers.tsv', __dir__))
   annotation :organism, 'Example organism'
-RUBY
+end
+```
+
+For the generated base and identifier setup, pass the body, selected base,
+and TSV contents separately, as shown here. The TSV header fields name its
+identifier formats (e.g. `#ID,Name`); see Scout-gear's [Working with
+Entities](https://github.com/rbbt-workflows/scout-gear/blob/master/doc/user/WorkingWithEntities.md):
+
+```ruby
+entity_definition = "annotation :organism, 'Example organism'"
+identifier_tsv = "#ID,Name\nexample,Example\n"
 
 ScoutCoder.job(:define_entity,
   entity_name: 'sample_entity',
-  definition: entity_definition
+  definition: entity_definition,
+  base: 'EntityWorkflow',
+  identifiers: identifier_tsv
 ).run
 
 property_definition = <<~'RUBY'
-  property :label do
-    "sample:#{self}"
+  property :label => :single do |prefix, suffix|
+    "#{prefix}#{self}#{suffix}"
   end
 RUBY
 
@@ -214,25 +227,65 @@ ScoutCoder.job(:define_entity_property,
 ).run
 ```
 
-`define_entity` writes `lib/ScoutCoder/entity/<entity>.rb`; each call to
-`define_entity_property` writes `lib/ScoutCoder/entity/<entity>/<property>.rb`.
-The workflow loader loads the entity definitions first and then recursively loads
-property files in sorted order (see Layout conventions and LiveWorkflow for the
-combined order). Both authoring tasks reload the checkout's `workflow.rb` and
-confirm registration. They refuse to overwrite existing
-entity/property files or an already-registered entity/property. They check
+`define_entity` writes `share/entities/<entity>.rb`; each call to
+`define_entity_property` writes `share/entity_properties/<entity>/<property>.rb`.
+Scout-gear's `LiveWorkflow` loader loads entity drafts before recursively
+loading property drafts in sorted order (see Layout conventions and
+LiveWorkflow for the combined order). The authoring tasks refuse to overwrite
+existing entity/property files or an already-registered entity/property. They check
 names, Ruby syntax, and the entity/property declaration; they do not prove the
 semantics of the Ruby code. Since the supplied source executes during workflow
 loading and reload, treat it as trusted code, not sandboxed input. A reload or
 registration failure can occur after the candidate file has been written; the
 task reports the failure but does not generally roll back that file.
 
+### Entity and Python task authoring formats
+
+The authoring tools generate the scaffolding described in the task entries
+below. These examples are generator inputs, not complete files. Hand-authored
+files loaded directly by Scout-gear's `LiveWorkflow` must be wrapped in the
+target workflow module.
+
+- For `define_entity`, supply only the entity body (for example annotations
+  and helper declarations), not a `module` wrapper or `extend Entity` /
+  `extend EntityWorkflow` line. Select the base through `base`; the generator
+  emits the top-level entity module and base extension. If `identifiers` is
+  supplied, pass TSV text separately; the tool writes
+  `share/entity/<entity>.identifiers.tsv` and generates a relative-path
+  `add_identifiers` call. For `define_entity_property`, supply a matching
+  `property :<property_name> => :<dispatch_type> do |args...| ... end`
+  declaration and executable body. It wraps the complete source in the existing
+  entity module. Example `definition`:
+
+  ```ruby
+  property :hello => :single do |prefix, suffix|
+    "#{prefix}#{self}#{suffix}"
+  end
+  ```
+
+- For `define_python_task`, author the function definitions and explicit
+  `scout.task(function)` registration; the tool inserts only a missing
+  top-level `import scout` (after a module docstring and `__future__` imports
+  when present). It supplies no function or task declaration. For example:
+
+  ```python
+  import scout
+
+  def greet(name: str = "World") -> str:
+      return f"Hello, {name}!"
+
+  scout.task(greet)
+  ```
+
 An optional `identifiers` input to `define_entity` is the TSV text to write at
 `share/entity/<entity>.identifiers.tsv`. It must be non-empty and have a header
-accepted by `TSV.parse_header`; the generated entity definition registers that
-path with `add_identifiers` at load time. The path is constructed relative to
+accepted by `TSV.parse_header` naming the identifier formats it maps (for
+example, `#ID,Name`; see Scout-gear's [Working with Entities](https://github.com/rbbt-workflows/scout-gear/blob/master/doc/user/WorkingWithEntities.md)). The generated entity definition registers that path with `add_identifiers` at load time. The path is constructed relative to
 the entity definition file, so registration does not depend on the process's
-current working directory. The TSV header fields are the identifier formats used by
+current working directory. Draft authoring tasks write entity modules under
+`share/entities/` and property source under `share/entity_properties/`; the
+built-in module/property loader for `lib/ScoutCoder/entity/` is a separate
+convention. The TSV header fields are the identifier formats used by
 the entity translation machinery; see the Scout-gear
 [Working with Entities](https://github.com/rbbt-workflows/scout-gear/blob/master/doc/user/WorkingWithEntities.md)
 documentation for the TSV identifier-file conventions. Supplying identifier
@@ -261,13 +314,14 @@ original `:single2array` alias from `:single`, or `:array2single` from
 restricts the listing to that module's own entity constants; the task itself
 exposes no input for it.
 
-Entity definitions and property files are loaded from
+Built-in entity definitions and property files are loaded from
 `lib/ScoutCoder/entity/`. Identifier TSV files remain under `share/entity/`;
-they are resource data registered by the generated entity definition. Files
-placed elsewhere are not loaded by this entity-loading step unless another
-part of the workflow explicitly loads them. Draft entities and properties
-authored under `share/entities/` and `share/entity_properties/` follow the
-`LiveWorkflow` convention instead and are loaded by the extend hook.
+they are resource data registered by the generated entity definition. The
+`define_entity` and `define_entity_property` authoring tools instead create
+drafts loaded by Scout-gear's `LiveWorkflow` under `share/entities/` and
+`share/entity_properties/`.
+These are separate loading conventions; do not relocate drafts to the built-in
+tree expecting the authoring-task loader to discover them.
 
 ## Testing
 
@@ -322,8 +376,8 @@ Create and register an entity module in this checkout
 
 Inputs: required `entity_name` and trusted Ruby `definition`; optional `base`
 (default `Entity`, or `EntityWorkflow`) and `identifiers` (TSV contents).
-Writes `lib/ScoutCoder/entity/<entity>.rb` and reloads `workflow.rb` to register
-the module. See [Authoring ScoutCoder entities](#authoring-scoutcoder-entities)
+Writes `share/entities/<entity>.rb` and reloads `workflow.rb` to register the
+module. See [Authoring ScoutCoder entities](#authoring-scoutcoder-entities)
 above for the input-body format, identifier-file conventions, limitations,
 and examples.
 
@@ -332,7 +386,7 @@ Add one property to an existing ScoutCoder entity
 
 Inputs: required `entity_name`, `property_name`, and trusted Ruby `definition`
 containing a matching `property :<property_name>` declaration. Writes
-`lib/ScoutCoder/entity/<entity>/<property>.rb`, reloads the workflow, and
+`share/entity_properties/<entity>/<property>.rb`, reloads the workflow, and
 checks that the property is registered. See
 [Authoring ScoutCoder entities](#authoring-scoutcoder-entities) above.
 
@@ -366,38 +420,33 @@ not enumerate the complete dependency list; the output explicitly marks the
 list as incomplete when applicable.
 
 ## define_task
-Create a new ScoutCoder task source file
+Create a Scout workflow task draft
 
-Inputs: `task_name` and `definition` (both required) plus optional
-`export_type`. The task name must match `[a-z][a-z0-9_]*`; the Ruby source
-must declare the matching task. The source is wrapped in `module ScoutCoder`,
-syntax-checked, and created as `share/tasks/<task_name>.rb` without
-overwriting an existing file. `export_type` accepts `export` or `export_exec`
-(the default), or `none` to omit the export declaration. The task directory is
-created when needed.
-
-After writing the candidate, `define_task` reloads the workflow and verifies
-that the task is registered. This loads discovered `share/tasks/*.rb` files;
-their trusted Ruby code executes in-process and may have top-level side effects.
-If loading fails, the candidate remains on disk and workflow state may be
-partially changed. The result reports task-name, source, declaration, syntax,
-load, and registration validation.
-
-Use `author_task_test` and `run_task_test` as the test loop. For a task in
-`share/tasks/`, its test is `share/test/task/<task_name>.rb`. Tests for built-in
-tasks in `lib/ScoutCoder/tasks/` are placed under `test/ScoutCoder/tasks/` as
-`test_<file>.rb`. A fresh test process does not clear persistent Scout job
-caches; clean jobs explicitly when freshness matters. Documentation for an
-authored task lives in its `desc`; when promoting a task into `lib/`, remove
-that `desc` and document it here with `document_task`.
+Inputs: `task_name`, `definition`, and optional `export_type` and `workflow`.
+The definition is Ruby Scout DSL source: author any needed `desc`, `input`,
+and `dep` declarations and the matching `task :name => :type do ... end`.
+Inputs and dependencies are not inferred from the task body. The definition
+may declare additional tasks. The generator supplies the enclosing workflow
+module and, by default, `export :<task_name>`; set `export_type` to
+`export_exec` or `none` to change or omit that export. The task name must match
+`[a-z][a-z0-9_]*`, and the source must declare that task. It is syntax-checked
+and written to `share/tasks/<task_name>.rb` without overwriting an existing
+file. After writing it, the task reloads the workflow and verifies
+registration. Source is trusted Ruby code executed during loading; a load or
+registration failure can occur after the file is written.
 
 Example definition:
 
 ```ruby
 definition = <<~'RUBY'
+  task :greeting_prefix => :string do
+    'Hello'
+  end
   desc 'Greet someone'
-  task :greet, :string do |name|
-    "Hello, #{name}!"
+  dep :greeting_prefix
+  input :name, :string, 'Name to greet', 'World'
+  task :greet => :string do |name|
+    "#{step(:greeting_prefix).load}, #{name}!"
   end
 RUBY
 
@@ -407,30 +456,103 @@ ScoutCoder.job(:define_task,
 ).run
 ```
 
+Use `author_task_test` and `run_task_test` for the test loop. A task's draft
+documentation lives in its `desc`; when promoted into `lib/`, remove that
+`desc` and document it here with `document_task`.
+
 ## define_helper
-Create and register a reusable ScoutCoder workflow helper
+Create a Scout workflow helper draft
 
-Inputs: `helper_name` and `definition` (both required). The identifier must
-match `[a-z][a-z0-9_]*`; the source must declare the matching `helper :name`.
-The source is wrapped in `module ScoutCoder`, syntax-checked, and written as
-`share/helpers/<helper_name>.rb` without overwriting an existing definition.
-The workflow loader loads every `share/helpers/*.rb` file after authored tasks;
-`define_helper` then reloads the workflow and confirms the helper is registered.
-As with authored tasks, the candidate remains on disk if reload or registration
-fails, and loading trusted Ruby source can have top-level side effects.
+Inputs: `helper_name`, `definition`, and optional `workflow`. The definition
+must include the matching `helper :<helper_name> do |args...|` declaration
+and body. The generator supplies the enclosing workflow module but does not
+infer the helper's arguments or behavior. The name must match
+`[a-z][a-z0-9_]*`; the source is syntax-checked and written to
+`share/helpers/<helper_name>.rb` without overwriting an existing file. The
+workflow reloads and verifies registration. Source is trusted Ruby code run
+during loading; a load or registration failure can occur after the file is
+written.
 
-Example definition text:
+Example definition:
 
 ```ruby
 definition = <<~'RUBY'
-  helper :normalize do |values|
-    total = values.sum(&:to_f)
-    values.map { |value| value.to_f / total }
+  helper :join_parts do |left, right|
+    "#{left}-#{right}"
   end
 RUBY
 
-ScoutCoder.job(:define_helper, helper_name: 'normalize', definition: definition).run
+ScoutCoder.job(:define_helper,
+  helper_name: 'join_parts',
+  definition: definition
+).run
 ```
+
+Helpers run in a workflow Step context; for tests, declare a disposable task
+that calls the helper and run that task's Step.
+
+## define_python_task
+Create a Python-backed Scout task source file
+
+Inputs: `task_name`, `python_source`, and optional `workflow` (default
+`ScoutCoder`). The name must match `[a-z][a-z0-9_]*`; submitted Python
+source is written to `python/tasks/<task_name>.py` in the target workflow
+checkout. The tool supplies the framework import envelope—a top-level
+`import scout`—when the source lacks one, placing it after any module
+docstring and `from __future__` imports. No other Python task code is
+synthesized. The file name selects the Python source file; registered
+function names become the Scout task names and need not be the file name.
+
+### Framework-provided setup vs. user-authored task code
+
+The only authoring boilerplate this tool supplies is the top-level
+`import scout`. That import makes the framework API available; it does not
+declare a task. Authors must still write each Python function header/signature and action
+body, and call `scout.task(function)` to explicitly register the function. For example,
+include `scout.task(greet)` after defining `greet`; a function definition by
+itself is not registered. In this Python task API, inputs are described by the
+authored function signature; `define_python_task` does not infer or generate
+functions, signatures, registrations, dependencies, or task declarations.
+This boundary is intentional.
+
+Minimal complete registration shape (author the function and registration;
+the generator supplies `import scout` only if it is missing):
+
+```python
+import scout
+
+def greet(name: str = "World") -> str:
+    return f"Hello, {name}!"
+
+scout.task(greet)
+```
+
+When `import scout` is omitted from submitted source, the generator inserts it;
+the remainder of this example is still authored by the caller. This complete
+function-and-registration format matches Scout-rig's
+[Python task authoring guide](../scout-rig/user/DefiningPythonTasks.md).
+The task rejects empty or syntactically invalid Python, files that do not
+register task metadata, and any existing target (including a symlink). It
+uses the configured `PYTHON` executable or `python3` and the local
+`~/git/scout-rig/python` package to inspect `--scout-metadata`, then reloads
+the workflow and checks each discovered function name is registered. When
+the import was missing, the saved file includes that framework-supplied
+import and the result reports `framework_import_added: true`; otherwise the
+submitted source remains unchanged and the flag is false. If metadata
+inspection or reload fails after creation, the candidate remains on disk for
+inspection; the error identifies that state. This executes trusted Python
+source during metadata inspection.
+
+## author_python_task_test
+Create a Python unit test for an existing Python task file
+
+Inputs: `task_name` and `test_source`. Requires
+`python/tasks/<task_name>.py`; writes complete Python source unchanged to
+`python/test/test_<task_name>.py`. The test source must be non-empty and pass
+Python AST syntax validation (using `PYTHON` or `python3`). Existing targets,
+including symlinks, are never overwritten. The source is not executed or
+otherwise checked as a `unittest` test; this tool does not add Python test
+discovery or execution behavior.
 
 ## author_helper_test
 Create a test for an existing ScoutCoder-authored workflow helper

@@ -19,6 +19,36 @@ module ScoutCoder
       File.realpath(File.expand_path('../..', __dir__))
     end
 
+    def workflow_root(workflow)
+      target = if workflow.is_a?(String)
+                 if workflow == 'ScoutCoder'
+                   ScoutCoder
+                 else
+                   candidate = File.expand_path(workflow)
+                   unless File.exist?(candidate)
+                     local_candidate = File.expand_path(File.join(project_root, 'tmp', 'workflows', workflow))
+                     candidate = local_candidate if File.directory?(local_candidate)
+                   end
+                   entrypoint = File.directory?(candidate) ? File.join(candidate, 'workflow.rb') : candidate
+                   if File.file?(entrypoint)
+                     root = File.dirname(entrypoint)
+                     loaded = Workflow.workflows.find do |candidate_workflow|
+                       candidate_workflow.respond_to?(:libdir) && candidate_workflow.libdir &&
+                         File.expand_path(candidate_workflow.libdir.to_s) == File.expand_path(root)
+                     end
+                     loaded || root
+                   else
+                     Workflow.workflows.find { |candidate_workflow| candidate_workflow.to_s == workflow } || Workflow.require_workflow(workflow)
+                   end
+                 end
+               else
+                 workflow
+               end
+      root = target.is_a?(String) ? target : (target.respond_to?(:libdir) ? target.libdir : nil)
+      raise ArgumentError, "workflow '#{workflow}' has no checkout libdir" if root.nil? || root.to_s.empty?
+      File.expand_path(root.to_s)
+    end
+
     def safe_child_path(root, *parts)
       root = File.realpath(root)
       path = File.expand_path(File.join(root, *parts))
@@ -68,7 +98,7 @@ module ScoutCoder
       timeout_seconds = Integer(timeout_seconds)
       raise ArgumentError, 'timeout_seconds must be positive' unless timeout_seconds.positive?
 
-      loader = '$LOAD_PATH.unshift(File.expand_path("lib", Dir.pwd)); require "./workflow"; load ARGV.fetch(0)'
+      loader = '$LOAD_PATH.unshift(File.expand_path("lib", Dir.pwd)); require File.expand_path("workflow", Dir.pwd); load ARGV.fetch(0)'
       command = [RbConfig.ruby, '-I', File.join(root, 'lib'), '-e', loader, test_path]
       stdout = stderr = ''
       status = nil

@@ -11,24 +11,45 @@ class EntityToolsTest < Test::Unit::TestCase
     name = "entity_probe_#{Process.pid}_#{SecureRandom.hex(3)}"
     property = "token_#{SecureRandom.hex(3)}"
     constant = ScoutCoder::EntityDefinitionSupport.constant_name(name)
-    entity_path = File.expand_path("../../../lib/ScoutCoder/entity/#{name}.rb", __dir__)
-    property_path = File.expand_path("../../../lib/ScoutCoder/entity/#{name}/#{property}.rb", __dir__)
-    identifiers_path = File.expand_path("../../../share/entity/#{name}.identifiers.tsv", __dir__)
+    entity_path = File.expand_path("../../../tmp/workflows/TestWF/share/entities/#{name}.rb", __dir__)
+    property_path = File.expand_path("../../../tmp/workflows/TestWF/share/entity_properties/#{name}/#{property}.rb", __dir__)
+    identifiers_path = File.expand_path("../../../tmp/workflows/TestWF/share/entity/#{name}.identifiers.tsv", __dir__)
     entity_definition = "annotation :organism, 'Organism'\n"
-    property_definition = "property :#{property} do\n  \"#{self}\"\nend"
+    property_definition = <<~'RUBY'.sub('PROPERTY_NAME', property)
+      property :PROPERTY_NAME => :single do |prefix, suffix|
+        "#{prefix}#{self}#{suffix}"
+      end
+    RUBY
     script = <<~'RUBY'
-      require './workflow'
+      require File.expand_path('workflow', Dir.pwd)
       require 'json'
       name, property, entity_definition, property_definition = ARGV
+      require 'pathname'
+      workflow_root = File.expand_path('tmp/workflows/TestWF', Dir.pwd)
+      FileUtils.mkdir_p(workflow_root)
+      workflow_file = File.join(workflow_root, 'workflow.rb')
+      File.write(workflow_file, <<~'WORKFLOW') unless File.file?(workflow_file)
+        require 'scout'
+        require 'scout-ai'
+        require 'scout/workflow/live'
+        module TestWF
+          extend Workflow
+          self.libdir = __dir__
+          extend ::LiveWorkflow
+        end
+      WORKFLOW
+      Workflow.require_workflow_file(Pathname.new(workflow_file))
       entity = ScoutCoder.job(:define_entity, nil, entity_name: name,
                               definition: entity_definition, base: 'Entity',
-                              identifiers: "#ID,Name\nid1,one\n").run
-      raise 'entity registration missing' unless ScoutCoder.const_defined?(ScoutCoder::EntityDefinitionSupport.constant_name(name), false)
+                              identifiers: "#ID,Name\nid1,one\n", workflow: 'TestWF').run
+      raise 'entity registration missing' unless Object.const_defined?(ScoutCoder::EntityDefinitionSupport.constant_name(name), false)
       property_result = ScoutCoder.job(:define_entity_property, nil,
                                        entity_name: name, property_name: property,
-                                       definition: property_definition).run
-      entity_module = ScoutCoder.const_get(ScoutCoder::EntityDefinitionSupport.constant_name(name), false)
+                                       definition: property_definition, workflow: 'TestWF').run
+      entity_module = Object.const_get(ScoutCoder::EntityDefinitionSupport.constant_name(name), false)
       raise 'property missing after reload' unless entity_module.properties.keys.map(&:to_s).include?(property)
+      actual = entity_module.setup('entity-id').public_send(property, 'prefix-', '-suffix')
+      raise "two-argument property returned #{actual.inspect}" unless actual == 'prefix-entity-id-suffix'
       raise 'identifier file was not registered' unless entity_module.identifier_files.any? { |path| path.to_s.end_with?("#{name}.identifiers.tsv") }
       raise 'identifier path is not absolute' unless entity_module.identifier_files.first.to_s.start_with?('/')
       puts JSON.generate(entity: entity, property: property_result,
@@ -53,19 +74,37 @@ class EntityToolsTest < Test::Unit::TestCase
   def test_entity_authoring_reloads_checkout_lib_when_process_cwd_is_elsewhere
     name = "external_cwd_probe_#{Process.pid}_#{SecureRandom.hex(3)}"
     root = File.expand_path('../../../', __dir__)
-    entity_path = File.join(root, 'lib', 'ScoutCoder', 'entity', "#{name}.rb")
-    identifiers_path = File.join(root, 'share', 'entity', "#{name}.identifiers.tsv")
+    entity_path = File.join(root, 'tmp', 'workflows', 'TestWF', 'share', 'entities', "#{name}.rb")
+    identifiers_path = File.join(root, 'tmp', 'workflows', 'TestWF', 'share', 'entity', "#{name}.identifiers.tsv")
     script = <<~'RUBY'
       require 'json'
       require 'tmpdir'
+      require 'fileutils'
       root, name = ARGV
+      workflow_root = File.join(root, 'tmp', 'workflows', 'TestWF')
+      FileUtils.mkdir_p(workflow_root)
+      workflow_file = File.join(workflow_root, 'workflow.rb')
+      unless File.file?(workflow_file)
+        File.write(workflow_file, <<~'WORKFLOW')
+          require 'scout'
+          require 'scout-ai'
+          require 'scout/workflow/live'
+          module TestWF
+            extend Workflow
+            self.libdir = __dir__
+            extend ::LiveWorkflow
+          end
+        WORKFLOW
+      end
       Dir.chdir(Dir.tmpdir)
       require File.join(root, 'workflow')
+      require 'pathname'
+      Workflow.require_workflow_file(Pathname.new(File.join(workflow_root, 'workflow.rb')))
       result = ScoutCoder.job(:define_entity, nil, entity_name: name,
                               definition: "annotation :organism, 'Organism'\n",
-                              identifiers: "#ID,Name\nid1,one\n").run
-      entity = ScoutCoder.const_get(ScoutCoder::EntityDefinitionSupport.constant_name(name), false)
-      expected = File.join(root, 'share', 'entity', "#{name}.identifiers.tsv")
+                              identifiers: "#ID,Name\nid1,one\n", workflow: 'TestWF').run
+      entity = Object.const_get(ScoutCoder::EntityDefinitionSupport.constant_name(name), false)
+      expected = File.join(root, 'tmp', 'workflows', 'TestWF', 'share', 'entity', "#{name}.identifiers.tsv")
       actual = entity.identifier_files.map(&:to_s)
       raise "identifier path mismatch: #{actual.inspect}" unless actual.include?(expected)
       puts JSON.generate(result: result, identifiers: actual)
@@ -84,18 +123,26 @@ class EntityToolsTest < Test::Unit::TestCase
   ensure
     File.delete(entity_path) if entity_path && File.file?(entity_path)
     File.delete(identifiers_path) if identifiers_path && File.file?(identifiers_path)
+    FileUtils.rm_rf(File.join(root, 'tmp', 'workflows', 'TestWF')) if root
+
   end
 
   def test_entity_workflow_base_is_opt_in_and_not_double_extended
     name = "workflow_entity_probe_#{Process.pid}_#{SecureRandom.hex(3)}"
-    entity_path = File.expand_path("../../../lib/ScoutCoder/entity/#{name}.rb", __dir__)
+    entity_path = File.expand_path("../../../tmp/workflows/TestWF/share/entities/#{name}.rb", __dir__)
     script = <<~'RUBY'
-      require './workflow'
+      require File.expand_path('workflow', Dir.pwd)
       name = ARGV.fetch(0)
+      module TestWF
+        extend Workflow
+        extend ::LiveWorkflow
+      end
       result = ScoutCoder.job(:define_entity, nil, entity_name: name,
                               definition: "property :from_workflow do; 'ok'; end",
-                              base: 'EntityWorkflow').run
-      entity = ScoutCoder.const_get(ScoutCoder::EntityDefinitionSupport.constant_name(name), false)
+                              base: 'EntityWorkflow', workflow: 'TestWF').run
+      entity = Object.const_get(ScoutCoder::EntityDefinitionSupport.constant_name(name), false)
+      raise 'entity not top-level' unless Object.const_defined?(ScoutCoder::EntityDefinitionSupport.constant_name(name), false)
+      raise 'entity namespaced in TestWF' if TestWF.const_defined?(ScoutCoder::EntityDefinitionSupport.constant_name(name), false)
       raise 'EntityWorkflow base not applied' unless entity.respond_to?(:tasks)
       raise 'property metadata was reset' unless entity.properties.key?(:from_workflow)
       puts result[:base]
@@ -113,14 +160,31 @@ class EntityToolsTest < Test::Unit::TestCase
       ScoutCoder.job(:define_entity, nil, entity_name: '../escape', definition: 'true').run
     end
     name = "overwrite_probe_#{Process.pid}_#{SecureRandom.hex(3)}"
-    path = File.expand_path("../../../lib/ScoutCoder/entity/#{name}.rb", __dir__)
+    path = File.expand_path("../../../tmp/workflows/TestWF/share/entities/#{name}.rb", __dir__)
     FileUtils.mkdir_p(File.dirname(path))
     File.write(path, '# existing')
-    assert_raise(ParameterException) do
-      ScoutCoder.job(:define_entity, nil, entity_name: name, definition: 'true').run
+    begin
+      require 'pathname'
+      test_workflow_root = File.expand_path('../../../tmp/workflows/TestWF', __dir__)
+      FileUtils.mkdir_p(test_workflow_root)
+      File.write(File.join(test_workflow_root, 'workflow.rb'), <<~'WORKFLOW')
+        require 'scout'
+        require 'scout-ai'
+        require 'scout/workflow/live'
+        module TestWF
+          extend Workflow
+          self.libdir = __dir__
+          extend ::LiveWorkflow
+        end
+      WORKFLOW
+      Workflow.require_workflow_file(Pathname.new(File.join(test_workflow_root, 'workflow.rb')))
+      assert_raise(ParameterException) do
+        ScoutCoder.job(:define_entity, nil, entity_name: name, definition: 'true', workflow: 'TestWF').run
+      end
+      assert_equal '# existing', File.read(path)
+    ensure
+      File.delete(path) if File.file?(path)
     end
-    assert_equal '# existing', File.read(path)
-    File.delete(path)
     assert_equal true, ScoutCoder::EntityDefinitionSupport.entity_extension?("extend Entity\n")
     assert_equal true, ScoutCoder::EntityDefinitionSupport.entity_extension?("extend EntityWorkflow\n")
     assert_equal true, ScoutCoder::EntityDefinitionSupport.entity_extension?("extend(\n  Entity\n)")
@@ -130,34 +194,105 @@ class EntityToolsTest < Test::Unit::TestCase
     assert_equal true, ScoutCoder::EntityDefinitionSupport.entity_extension?("extend ( EntityWorkflow )")
     assert_equal true, ScoutCoder::EntityDefinitionSupport.entity_extension?("extend Entity\nannotation :note, 'text'")
     [
-      'extend(::Entity)',
-      'extend(Entity,)',
-      'extend(Entity, Module.new)',
-      'extend(*[Entity])',
-      'extend(*[Other, ::Entity])',
-      'extend(Other, *[Entity])',
-      'extend(EntityWorkflow, Module.new)',
-      'self.extend(::Entity)'
-    ].each do |source|
-      assert_equal true, ScoutCoder::EntityDefinitionSupport.entity_extension?(source), source
-    end
+      'extend(::Entity)', 'extend(Entity,)', 'extend(Entity, Module.new)',
+      'extend(*[Entity])', 'extend(*[Other, ::Entity])', 'extend(Other, *[Entity])',
+      'extend(EntityWorkflow, Module.new)', 'self.extend(::Entity)'
+    ].each { |source| assert_equal true, ScoutCoder::EntityDefinitionSupport.entity_extension?(source), source }
     [
-      'extend(OtherEntity)',
-      'extend(Entity::Other)',
-      'extend(Other::Entity)',
-      'extend(name)',
-      'extend(*modules)',
-      'obj.other(Entity)',
-      "# extend Entity\nannotation :note, 'extend Entity'\n",
-      'annotation :note, "extend(::Entity)"'
-    ].each do |source|
-      assert_equal false, ScoutCoder::EntityDefinitionSupport.entity_extension?(source), source
-    end
+      'extend(OtherEntity)', 'extend(Entity::Other)', 'extend(Other::Entity)',
+      'extend(name)', 'extend(*modules)', 'obj.other(Entity)',
+      "# extend Entity\nannotation :note, 'extend Entity'\n", 'annotation :note, "extend(::Entity)"'
+    ].each { |source| assert_equal false, ScoutCoder::EntityDefinitionSupport.entity_extension?(source), source }
     assert_raise(ParameterException) do
       ScoutCoder.job(:define_entity_property, nil, entity_name: 'not_registered_here',
                      property_name: 'bad', definition: 'property :other do; end').run
     end
   end
+
+  def test_second_workflow_augments_top_level_entity_with_property
+    require 'pathname'
+    root = File.expand_path('../../../', __dir__)
+    first = File.join(root, 'tmp', 'workflows', 'TestWF')
+    second = File.join(root, 'tmp', 'workflows', 'TestWF2')
+    script = <<~'RUBY'
+      require 'scout'
+      require 'scout-ai'
+      require 'pathname'
+      require 'fileutils'
+      root, first, second = ARGV
+      require File.join(root, 'workflow')
+      begin
+      def register(path)
+        result = Workflow.require_workflow_file(Pathname.new(File.join(path, 'workflow.rb')))
+        Workflow.workflows.find { |wf| wf.respond_to?(:libdir) && wf.libdir && File.expand_path(wf.libdir.to_s) == File.expand_path(path) } || result
+      end
+      FileUtils.mkdir_p(first)
+      FileUtils.mkdir_p(second)
+      prior_workflows = [first, second].to_h do |path|
+        workflow_file = File.join(path, 'workflow.rb')
+        [workflow_file, File.file?(workflow_file) ? File.binread(workflow_file) : nil]
+      end
+      live = 'scout/workflow/live'
+      [first, second].each_with_index do |path, index|
+        module_name = index.zero? ? 'TestWF' : 'TestWF2'
+        File.write(File.join(path, 'workflow.rb'), <<~SOURCE)
+          require 'scout'
+          require 'scout-ai'
+          require #{live.inspect}
+          module #{module_name}
+            extend Workflow
+            self.libdir = #{path.inspect}
+            extend ::LiveWorkflow
+          end
+        SOURCE
+      end
+      a = register(first)
+      b = register(second)
+      task_name = "scope_task_#{Process.pid}"
+      helper_name = "scope_helper_#{Process.pid}"
+      FileUtils.mkdir_p(File.join(first, 'share', 'tasks'))
+      FileUtils.mkdir_p(File.join(first, 'share', 'helpers'))
+      File.write(File.join(first, 'share', 'tasks', "#{task_name}.rb"), "module TestWF\n  task :#{task_name} => :string do; 'scoped'; end\nend\n")
+      File.write(File.join(first, 'share', 'helpers', "#{helper_name}.rb"), "module TestWF\n  helper :#{helper_name} do |value| value.reverse end\nend\n")
+      a.load_live_files!
+      raise 'workflow task failed to register' unless a.tasks.key?(task_name.to_sym)
+      raise "workflow helper failed to register: #{a.helpers.keys.inspect}" unless a.helpers.key?(helper_name.to_sym)
+      entity_name = "scoped_entity_#{Process.pid}"
+      entity_path = File.join(first, 'share', 'entities', "#{entity_name}.rb")
+      FileUtils.mkdir_p(File.dirname(entity_path))
+      File.write(entity_path, "module ::#{ScoutCoder::EntityDefinitionSupport.constant_name(entity_name)}\n  extend Entity\nend\n")
+      a.load_live_files!
+      entity = Object.const_get(ScoutCoder::EntityDefinitionSupport.constant_name(entity_name), false)
+      prop = "second_prop_#{Process.pid}"
+      prop_path = File.join(second, 'share', 'entity_properties', entity_name, "#{prop}.rb")
+      FileUtils.mkdir_p(File.dirname(prop_path))
+      File.write(prop_path, "module ::#{entity.name}\n  property :#{prop} do; 'cross'; end\nend\n")
+      b.load_live_files!
+      raise 'second workflow did not augment top-level entity' unless entity.properties.keys.map(&:to_s).include?(prop)
+      raise 'entity was nested' if TestWF2.const_defined?(entity.name.split('::').last, false)
+      puts "PASS task=#{task_name} helper=#{helper_name} entity=#{entity.name} property=#{prop}"
+    ensure
+      [first, second].each do |path|
+        FileUtils.rm_rf(File.join(path, 'share'))
+        workflow_file = File.join(path, 'workflow.rb')
+        original = prior_workflows && prior_workflows[workflow_file]
+        if original
+          File.write(workflow_file, original)
+        else
+          File.delete(workflow_file) if File.file?(workflow_file)
+          FileUtils.rmdir(path) if File.directory?(path) && Dir.empty?(path)
+        end
+      end
+    end
+    RUBY
+    stdout, stderr, status = Open3.capture3(RbConfig.ruby, '-Ilib', '-e', script, root, first, second, chdir: root)
+    assert_predicate status, :success?, "workflow scoping probe failed (#{status.exitstatus}):\\n#{stdout}\\n#{stderr}"
+    assert_match(/PASS task=.* helper=.* entity=.* property=.*/, stdout)
+  ensure
+    FileUtils.rm_rf(first) if first && File.directory?(first)
+    FileUtils.rm_rf(second) if second && File.directory?(second)
+  end
+
 end
 
 class ListEntitiesTest < Test::Unit::TestCase
@@ -166,14 +301,14 @@ class ListEntitiesTest < Test::Unit::TestCase
   def build_entity(name, base: Entity)
     constant = SUPPORT.constant_name(name)
     entity = Module.new
-    ScoutCoder.const_set(constant, entity)
+    Object.const_set(constant, entity)
     entity.extend(base)
     entity
   end
 
   def remove_entity(name)
     constant = SUPPORT.constant_name(name)
-    ScoutCoder.send(:remove_const, constant) if ScoutCoder.const_defined?(constant, false)
+    Object.send(:remove_const, constant) if Object.const_defined?(constant, false)
   end
 
   def test_empty_scope_contains_no_entities
@@ -194,7 +329,7 @@ class ListEntitiesTest < Test::Unit::TestCase
     name = "dup_probe_#{Process.pid}_#{SecureRandom.hex(3)}"
     entity = build_entity(name)
     entity.extend(Entity) # mimics a checkout entity file being re-loaded
-    assert_equal 2, Entity::MODULES.count { |entry| entry.equal?(entity) }
+    assert_equal 1, Entity::MODULES.count { |entry| entry.equal?(entity) }
     assert_equal 1, SUPPORT.entity_modules.count { |entry| entry.equal?(entity) }
   ensure
     remove_entity(name) if name
@@ -253,8 +388,8 @@ class ListEntitiesTest < Test::Unit::TestCase
     suffix = "#{Process.pid}_#{SecureRandom.hex(3)}"
     name = "listing_source_probe_#{suffix}"
     root = SUPPORT.project_root
-    entity_path = File.join(root, 'lib', 'ScoutCoder', 'entity', "#{name}.rb")
-    property_path = File.join(root, 'lib', 'ScoutCoder', 'entity', name, 'sample.rb')
+    entity_path = File.join(root, 'share', 'entities', "#{name}.rb")
+    property_path = File.join(root, 'share', 'entity_properties', name, 'sample.rb')
     FileUtils.mkdir_p(File.dirname(property_path))
     File.write(entity_path, "# source marker\n")
     File.write(property_path, "# property marker\n")
@@ -264,8 +399,8 @@ class ListEntitiesTest < Test::Unit::TestCase
     step.clean
     record = step.run.find { |item| item[:name] == name }
     assert_not_nil record
-    assert_equal "lib/ScoutCoder/entity/#{name}.rb", record.dig(:source, :definition)
-    assert_equal ["lib/ScoutCoder/entity/#{name}/sample.rb"], record.dig(:source, :property_files)
+    assert_equal "share/entities/#{name}.rb", record.dig(:source, :definition)
+    assert_equal ["share/entity_properties/#{name}/sample.rb"], record.dig(:source, :property_files)
     assert_equal %i[annotations base_kind formats identifier_files module name properties source], record.keys.sort
   ensure
     remove_entity(name) if name
@@ -279,17 +414,17 @@ class EntityLoaderOrderTest < Test::Unit::TestCase
   def test_workflow_loader_orders_entities_before_properties_on_update
     name = "loader_probe_#{Process.pid}_#{SecureRandom.hex(3)}"
     constant = ScoutCoder::EntityDefinitionSupport.constant_name(name)
-    entity_path = File.expand_path("../../../lib/ScoutCoder/entity/#{name}.rb", __dir__)
-    property_path = File.expand_path("../../../lib/ScoutCoder/entity/#{name}/loader_property.rb", __dir__)
+    entity_path = File.expand_path("../../../share/entities/#{name}.rb", __dir__)
+    property_path = File.expand_path("../../../share/entity_properties/#{name}/loader_property.rb", __dir__)
     FileUtils.mkdir_p(File.dirname(property_path))
-    File.write(entity_path, "module ScoutCoder; module #{constant}; extend Entity; end; end\n")
-    File.write(property_path, "module ScoutCoder; module #{constant}; property(:loader_property) { 'ok' }; end; end\n")
+    File.write(entity_path, "module ::#{constant}; extend Entity; end\n")
+    File.write(property_path, "module ::#{constant}; property(:loader_property) { 'ok' }; end\n")
     workflow = Workflow.require_workflow(File.expand_path('../../../workflow.rb', __dir__), update: true)
-    entity = workflow.const_get(constant, false)
+    entity = Object.const_get(constant, false)
     assert_include entity.properties.keys, :loader_property
     entity.properties.clear
     Workflow.require_workflow(File.expand_path('../../../workflow.rb', __dir__), update: true)
-    entity = ScoutCoder.const_get(constant, false)
+    entity = Object.const_get(constant, false)
     assert_include entity.properties.keys, :loader_property
   ensure
     File.delete(property_path) if property_path && File.file?(property_path)
@@ -299,14 +434,15 @@ class EntityLoaderOrderTest < Test::Unit::TestCase
 
   def test_reload_failure_restores_callers_working_directory
     original_directory = Dir.pwd
-    original_loader = Workflow.method(:require_workflow)
-    Workflow.define_singleton_method(:require_workflow) { |*| raise ArgumentError, 'simulated loader error' }
+    root = File.expand_path('../../../tmp/workflows/failing_reload_probe', __dir__)
+    FileUtils.mkdir_p(root)
+    File.write(File.join(root, 'workflow.rb'), "raise ArgumentError, 'simulated loader error'\n")
     error = assert_raise(ArgumentError) do
-      ScoutCoder::EntityDefinitionSupport.reload!('candidate.rb', 'failure probe')
+      ScoutCoder::EntityDefinitionSupport.reload!('candidate.rb', 'failure probe', root)
     end
     assert_match(/simulated loader error/, error.message)
     assert_equal original_directory, Dir.pwd
   ensure
-    Workflow.define_singleton_method(:require_workflow, original_loader) if original_loader
+    FileUtils.rm_rf(root) if root && File.directory?(root)
   end
 end
