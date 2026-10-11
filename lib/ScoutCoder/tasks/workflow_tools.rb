@@ -338,6 +338,7 @@ module ScoutCoder
       written: true, overwritten: false }
   end
 
-  export :define_task, :list_tasks, :task_inputs, :task_code, :task_dependencies
+  #export :define_task, :list_tasks, :task_inputs, :task_code, :task_dependencies
+  export :task_inputs, :task_code, :task_dependencies
   export_exec :run_task, :job_info, :job_status
 end

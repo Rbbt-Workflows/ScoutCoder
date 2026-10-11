@@ -323,6 +323,209 @@ drafts loaded by Scout-gear's `LiveWorkflow` under `share/entities/` and
 These are separate loading conventions; do not relocate drafts to the built-in
 tree expecting the authoring-task loader to discover them.
 
+## Agent path kinds
+
+ScoutCoder registers three path kinds on the scout-ai agent path engine:
+`task` (Scout workflow task files), `entity` (Scout entity module files,
+one file per entity) and `entity_property` (entity property files,
+addressed through nested `<entity>/<property>.rb` virtual paths). They
+expose the authoring surfaces in this checkout
+(`lib/ScoutCoder/path_kinds.rb`) as virtual filesystems an agent operates
+with the generic `path_*` tools: the `path_kinds` listing tool plus one
+tool per operation — `path_read`, `path_write`, `path_edit`, `path_list`,
+`path_move`, `path_rename`, `path_delete`, `path_validate`, `path_test`,
+`path_smoke` and `path_promote` — with no per-kind tool fan-out.
+`path_patch` is not offered for any of the three kinds. The kinds travel
+only with the whole-workflow `tool: ScoutCoder` introduction: a task-level
+tool line registers no kinds.
+
+Engine-level semantics — registering a kind, declaring kinds from a
+workflow's `PATH_KINDS` constant, capability normalization, the callback
+contract and the trust boundary — are documented in scout-ai's
+`doc/developer/PathEngine.md` in the scout-ai checkout. This section
+covers what is specific to these three kinds.
+
+### The two locations
+
+Each kind has two locations: `tmp` (default) holds authoring drafts that
+LiveWorkflow live-loads, and `project` holds promoted copies that nothing
+loads automatically (see `Wiring after promotion` below). Roots are inside
+this checkout and identical in shape across the kinds:
+
+| kind | tmp root (drafts, default) | project root (promoted) | virtual path |
+|---|---|---|---|
+| `task` | `share/tasks` | `lib/ScoutCoder/tasks` | `greet_user.rb` |
+| `entity` | `share/entities` | `lib/ScoutCoder/entity` | `demo_widget.rb` |
+| `entity_property` | `share/entity_properties` | `lib/ScoutCoder/entity` | `demo_widget/tag_palette.rb` |
+
+Concrete locations for the example names: a task draft lives at
+`share/tasks/greet_user.rb` and its promoted copy at
+`lib/ScoutCoder/tasks/greet_user.rb`; an entity draft at
+`share/entities/demo_widget.rb` and its promoted copy at
+`lib/ScoutCoder/entity/demo_widget.rb`; a property draft at
+`share/entity_properties/demo_widget/tag_palette.rb` and its promoted copy
+at `lib/ScoutCoder/entity/demo_widget/tag_palette.rb`.
+
+`entity` and `entity_property` deliberately share the project root:
+promoted entity files are flat `<entity>.rb` and promoted property files
+are nested `<entity>/<property>.rb` below it. The `entity_property`
+virtual path is nested for the same reason — one declarative promotion
+destination covers the whole kind. A flat property path (`tag_palette.rb`)
+is a validate error, not a second supported shape.
+
+### Generic operations
+
+`path_read`, `path_write`, `path_edit`, `path_list`, `path_move`,
+`path_rename` and `path_delete` behave as an exact filesystem view over
+the kind's roots. Every operation available on any kind here is available
+on all three, and the capability sets are identical:
+read/write/edit/list/move/rename/delete plus validate/test/smoke/promote.
+`patch` is off for all three kinds (whole-file authored sources).
+
+### validate, test and smoke
+
+`path_validate` performs static shape checks on one file; it never
+executes the target. Checks per kind:
+
+- `task` — the source must parse and carry a `module ScoutCoder` wrapper
+  (task files load into the ScoutCoder workflow module) plus a
+  `task :name => :type do ... end` declaration. In the `tmp` location
+  only, a missing `desc` is a warning, not an error (drafts carry their
+  docs in a desc; promoted tasks move it to this README).
+- `entity` — the source must parse, the top-level module must match the
+  file name (`demo_widget.rb` → `module DemoWidget`), and the module must
+  contain an `extend Entity` or `extend EntityWorkflow` line. Declaring a
+  second top-level module is a warning.
+- `entity_property` — the virtual path must be `<entity>/<property>.rb`
+  (a flat path is an error), the source must parse, the top-level module
+  must match the entity segment of the path, the file must NOT carry an
+  `extend` line (the entity file owns the extend), and it must declare
+  `property :name => :type do ... end`; a declared property name that
+  differs from the path's property segment is a warning. A typeless
+  `property :plain do` is valid and dispatches as `:both`.
+
+`path_test` writes the location-conventional paired test when none
+exists, then runs it in a fresh process that loads the checkout's
+`workflow.rb` from the checkout root — so LiveWorkflow live-loads every
+`share/` draft — and then loads the test file. A paired test is generated
+when absent, reused untouched when it already exists, and replaced only
+when a `test_source` body is supplied explicitly; `test_source` reaches
+the hook through direct dispatch, because the model-facing `path_test`
+call carries only `kind`, `path` and `location`. The run has no timeout.
+What the generated harness asserts differs by kind: for `task`, that the
+task is registered (plus a non-empty `desc`, tmp side only); for `entity`,
+that the module is defined and registered in `Entity::MODULES`; for
+`entity_property`, that the property is registered on its module and that
+a dispatch on a synthetic entity does not raise. Paired-test locations:
+
+| kind | tmp paired test | project paired test |
+|---|---|---|
+| `task` | `share/test/task/<name>.rb` | `test/ScoutCoder/tasks/test_<name>.rb` |
+| `entity` | `share/test/entity/<name>.rb` | `test/ScoutCoder/entity/test_<name>.rb` |
+| `entity_property` | `share/test/entity_property/<entity>/<entity>.<property>.rb` | `test/ScoutCoder/entity/test_<entity>_<property>.rb` |
+
+The share side carries no `test_` prefix; the project side does, and the
+property test name flattens the nested virtual path. These project-side
+locations are implemented and pinned by the regression suite
+(`test/ScoutCoder/test_path_kinds.rb`) but have no precedent elsewhere in
+the checkout: they are the convention this README records, still awaiting
+explicit ratification — flagged here rather than asserted as settled
+policy.
+
+`path_smoke` runs the same fresh-process workflow load, writes nothing,
+and never runs a Scout job or inference. What it proves differs by kind,
+in increasing strength: `task` is registration-only — it asserts the task
+name appears in `ScoutCoder.tasks` and does NOT execute the task;
+`entity` asserts the module is defined and registered in
+`Entity::MODULES`, with no dispatch; `entity_property` additionally
+performs a real dispatch on a synthetic entity, so the property body
+itself runs and must return without raising.
+
+### promote
+
+`path_promote` moves a file from `tmp` to `project`. The destination is
+declarative — always the kind's `project` root. The engine authorizes
+both endpoints, refuses to overwrite an existing destination unless you
+pass `overwrite: true`, and performs the move itself; the refusal happens
+before the move, so a refused promotion leaves the source file intact.
+After the move the engine runs the kind's post-move hook, which relocates
+the paired test alongside (`share/test/task/greet_user.rb` →
+`test/ScoutCoder/tasks/test_greet_user.rb`, and the entity equivalents).
+When the paired-test destination already exists and `overwrite` was not
+passed, the hook reports `post_move: skipped` with a reason and leaves
+both test files in place — the promoted file itself has already moved.
+When no tmp-side paired test exists the hook does nothing and creates no
+directories. The relocation writes outside the kind roots — see the trust
+note below.
+
+### Wiring after promotion (read this before promoting)
+
+Promotion is a file move, not registration. Nothing under
+`lib/ScoutCoder/tasks/` or `lib/ScoutCoder/entity/` is loaded
+automatically:
+
+- A promoted task is inert until a wiring line is added to `workflow.rb`,
+  next to the existing ones. For example, wiring a promoted `greet_user`
+  task:
+
+  ```ruby
+  require_relative 'lib/ScoutCoder/tasks/greet_user'
+  ```
+
+- A promoted entity or property file likewise needs its own wiring edit.
+  LiveWorkflow loads only `share/` drafts; `workflow.rb` contains no
+  loader for `lib/ScoutCoder/entity/` (that directory does not exist in
+  the checkout today).
+
+The wire-up is a deliberate source edit in every case; the path tools
+never edit `workflow.rb`. A promoted task also moves its documentation:
+remove the `desc` and write the entry in this README's `# Tasks` section
+with `document_task` (see `## Testing` below).
+
+### Trust boundaries
+
+- Paired-test writes (during `path_test`) and relocation (after
+  `path_promote`) target `share/test/...` and `test/ScoutCoder/...`,
+  which are outside the kind roots. The engine authorizes the operation
+  target, not those directories; the hook that writes or moves the paired
+  test is trusted plugin code. This is the documented engine trust
+  boundary, not an authorization defect, and the regression suite pins
+  it.
+- Entity-before-property ordering is a loader contract. A property file
+  whose entity module has not been loaded fails loudly at load time — the
+  underlying error surfaces; it is never a silent no-op — so property
+  files always load after their entity files (see `## LiveWorkflow` for
+  the combined lib/share load order). The smoke and test hooks catch a
+  wrong-order draft because they run in a fresh process.
+- Sandboxing is on for all three kinds: `entity` and `entity_property`
+  declare `sandbox: true` explicitly, and the `task` kind relies on the
+  engine default, which is `true`. Roots must be absolute, and every
+  operation is authorized against them before any callback runs.
+
+### When to use which
+
+Use the generators to create a draft from scratch —
+[`define_task`](#define_task), [`define_helper`](#define_helper),
+[`define_entity`](#define_entity) and
+[`define_entity_property`](#define_entity_property) add the enclosing
+module and scaffolding and refuse to overwrite an existing file. Use the
+path tools to manage the lifecycle of a draft that already exists:
+`path_write` stores whole-file content you author, and the remaining
+tools read, edit, validate, test, smoke and promote what is there. See
+the `# Tasks` entries for generator input formats.
+
+### Lifecycle
+
+The intended loop for one artifact:
+
+1. `path_write` the draft at its `tmp` location.
+2. `path_validate` for shape checks.
+3. `path_test` to write and run the paired test in a fresh process.
+4. `path_smoke` to confirm the draft registers when the real workflow
+   loads.
+5. `path_promote` to move it (and its paired test) to the project side.
+6. Wire it into `workflow.rb`; only then is the promoted artifact live.
+
 ## Testing
 
 ScoutCoder-authored task tests can be created with `author_task_test` and run

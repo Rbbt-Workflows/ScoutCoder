@@ -371,7 +371,7 @@ module ScoutCoder
       raise ParameterException, "define_entity validation/authoring failed: #{error.message}"
     end
   end
-  export_exec :define_entity
+  #export_exec :define_entity
 
   input :entity_name, :string, 'Existing ScoutCoder entity identifier', nil, required: true
   input :property_name, :string, 'Property identifier (lowercase letters, digits and underscores; starts with a letter)', nil, required: true
@@ -414,6 +414,6 @@ module ScoutCoder
       raise ParameterException, "define_entity_property validation/authoring failed: #{error.message}"
     end
   end
-  export_exec :define_entity_property
+  #export_exec :define_entity_property
 
 end

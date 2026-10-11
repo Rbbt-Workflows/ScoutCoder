@@ -4,7 +4,7 @@ module ScoutCoder
   # Promoted tasks: documentation lives in README.md, not desc.
   input :task_name, :string, 'New Python task file name (lowercase letters, digits and underscores; starts with a letter)', nil, required: true
   input :python_source, :text, 'Python task source; the tool supplies only the top-level `import scout` when missing (functions, signatures and scout.task registrations remain authored)', nil, required: true
-  input :workflow, :string, 'Workflow whose python/tasks directory receives the file', 'ScoutCoder'
+  input :workflow, :string, 'Workflow whose python/tasks directory receives the file', nil, required: true
   task :define_python_task => :json do |task_name, python_source, workflow|
     begin
       PythonTaskSupport.define_task(managed_workflow(workflow), task_name, python_source)

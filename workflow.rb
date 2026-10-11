@@ -10,17 +10,16 @@ Misc.add_libdir if __FILE__ == $PROGRAM_NAME
 
 module ScoutCoder
   extend Workflow
-  extend LiveWorkflow
-
-  # PythonWorkflow runs Python task files via ScoutPython's subprocess API.
-  # Add scout-rig's bundled Python package so `import scout` resolves.
-  scout_rig_python = File.expand_path('~/git/scout-rig/python')
-  ScoutPython.add_path(scout_rig_python) unless ScoutPython.paths.include?(scout_rig_python)
-
-  extend PythonWorkflow
-  @python_task_dir = Path.setup(File.expand_path('python/tasks', __dir__))
-  load_python_tasks
 end
+
+ScoutCoder.extend LiveWorkflow
+ScoutCoder.extend PythonWorkflow
+
+# Workflow-scoped path kinds for the scout-ai agent path engine. Must load
+# after the module is extended so the constant lands on ScoutCoder itself;
+# it is consumed by integrate_workflow_path_kinds(ScoutCoder) on
+# whole-workflow `tool: ScoutCoder` incorporation.
+require_relative 'lib/ScoutCoder/path_kinds'
 
 require_relative 'lib/ScoutCoder/tasks/documentation'
 require_relative 'lib/ScoutCoder/tasks/document_task'
@@ -29,6 +28,6 @@ require_relative 'lib/ScoutCoder/tasks/task_test_tools'
 require_relative 'lib/ScoutCoder/tasks/python_task_tools'
 require_relative 'lib/ScoutCoder/tasks/helper_tools'
 require_relative 'lib/ScoutCoder/tasks/entity_tools'
+require_relative 'lib/ScoutCoder/tasks/hello_r5'
 require_relative 'lib/ScoutCoder/tasks/list_entities'
 require_relative 'lib/ScoutCoder/helper_test_support'
-
