@@ -1,4 +1,5 @@
 ScoutCoder=/$PWD filter="*.rb *.rake Rakefile *.rdoc *.R *.sh *.js *.haml *.sass *.txt *.conf *.slim *.haml" {
+ README.md
  workflow.rb
  start_chat
  chats=chats filter="*"{
@@ -24,10 +25,13 @@ ScoutCoder=/$PWD filter="*.rb *.rake Rakefile *.rdoc *.R *.sh *.js *.haml *.sass
 
   path
   path.documentation
+
+  refactor
  }
  lib=lib {
   ScoutCoder=ScoutCoder{
    helper_test_support.rb
+   path_kinds.rb
    python_task_support.rb
    task_test_support.rb
    tasks=tasks{
@@ -54,6 +58,5 @@ ScoutCoder=/$PWD filter="*.rb *.rake Rakefile *.rdoc *.R *.sh *.js *.haml *.sass
  test=test {
   test_helper.rb
  }
- README.md
  LICENSE
 }
