@@ -1,19 +1,15 @@
 Documentation to help coding agents writing Scout code
 
-ScoutCoder is an AI-assisted Scout workflow for retrieving framework
-documentation, exploring installed workflows, and authoring or inspecting
-Scout workflow tasks, helpers, entities and their tests over a local
-checkout. The documentation lookup also covers any installed Scout workflow,
-since workflows can carry their own README.md, doc*/ and research/ folders in
-the same format as Scout repositories.
+ScoutCoder is an AI-assisted Scout workflow for retrieving framework documentation and developing Scout workflows over a local repository checkout. It provides tools to explore installed workflows and author, inspect, and test workflow tasks, helpers, and entity definitions.
 
-ScoutCoder concentrates on two groups of capabilities. First, documentation
-lookup tasks for the Scout ecosystem, backed by local clones of the
-`scout-gear`, `scout-essentials`, `scout-camp`, `scout-ai`, and `scout-rig`
-repositories under `~/git` and by every installed Scout workflow. Second,
-workflow-development tooling: tasks to author tasks, helpers and entity
-definitions, pair them with tests, run those tests in fresh processes, run
-any installed workflow task, and inspect or document the resulting jobs.
+ScoutCoder's documentation lookup covers both the core Scout ecosystem and any installed Scout workflow. In addition to local clones of the `scout-gear`, `scout-essentials`, `scout-camp`, `scout-ai`, and `scout-rig` repositories under `~/git`, it indexes the documentation available in installed workflows, including their `README.md`, `doc*/`, and `research/` directories, which follow the same conventions as Scout repositories.
+
+**ScoutCoder separates workflow-development tools from domain-specific tools.** The workflow being developed or explored is the one defined by the `workflow.rb` file in the current process directory (`PWD`). This directory is treated as the repository root, with the workflow representing that project. ScoutCoder supplies the general-purpose workflow-development tools, while the target workflow provides its own domain-specific tools.
+
+Its capabilities fall into two main groups:
+
+1. **Documentation and framework discovery:** Retrieve documentation across the Scout ecosystem and installed workflows, and explore their available functionality.
+2. **Workflow development and inspection:** Author tasks, helpers, and entity definitions; create and run their tests in fresh processes; execute tasks from installed workflows; and inspect or document the resulting jobs.
 
 A few small examples illustrate the intended use:
 
@@ -71,13 +67,14 @@ Open.consume_stream io
 
 ## Layout conventions
 
-- `workflow.rb` - workflow entrypoint. It requires the lib task files, then
-  loads this checkout's built-in entity definitions from
-  `lib/ScoutCoder/entity/*.rb`, then re-extends the global `::LiveWorkflow`
-  module (which loads authoring drafts under `share/`), and finally the built-in
-  entity property files under `lib/ScoutCoder/entity/<entity>/**/*.rb`. This
-  combined order guarantees every entity extend happens before any property
-  registration, from either source.
+- `workflow.rb` - workflow entrypoint. It requires the lib task files and
+  re-extends the global `::LiveWorkflow` module, which loads authoring
+  drafts under `share/` (entity drafts before property drafts). It does not
+  load any built-in entity tree: `lib/ScoutCoder/entity/` exists but is
+  empty, and `workflow.rb` requires no entity or entity-property files from
+  it. When a built-in entity tree is added, load its entity files before
+  re-extending `LiveWorkflow` and its property files after it, so every
+  entity extend precedes property registration from either source.
 - `lib/ScoutCoder/` - shipped functionality: task definitions under
   `lib/ScoutCoder/tasks/`, the built-in entity tree under
   `lib/ScoutCoder/entity/`, and the shared test-support modules
@@ -116,12 +113,15 @@ ScoutCoder's `workflow.rb` re-extends this shared Scout extension.
 Load order, on every pass: `share/tasks`, `share/helpers`,
 `share/entities`, `share/entity_properties` - top-level files of each
 subdirectory before nested ones, lexicographic within a level, so loads are
-deterministic. Entity files always precede property files, because
-re-extending `Entity` resets property metadata: a property file loaded before
-its entity file ends up unregistered. That ordering is a contract, not an
-implementation detail. ScoutCoder's `workflow.rb` relies on the same rule across sources: lib entity
-files load, then `LiveWorkflow` loads share entity and property drafts, then
-lib property files load. Thus every entity extend precedes property
+deterministic. Entity files always precede property files, because a
+property file loaded before its entity module has no module to register on
+and fails loudly at load time (`Entity.extended` guards `@properties` against
+being reset, so re-extension itself is not the failure). That ordering is a
+contract, not an
+implementation detail. When a built-in entity tree is present,
+`workflow.rb` relies on the same rule across sources: lib entity files
+load, then `LiveWorkflow` loads share entity and property drafts, then lib
+property files load. Thus every entity extend precedes property
 registration, whether the entity or property comes from `lib/` or `share/`.
 
 Reload semantics. Re-extending the global `::LiveWorkflow` module fires
@@ -161,7 +161,7 @@ ScoutCoder can create entity modules and their properties in this checkout under
 `share/entities/` and `share/entity_properties/`. Use `define_entity` to create a
 module and `define_entity_property` to add one property at a time. These are
 authoring drafts loaded by Scout-gear's `LiveWorkflow` extension; the shipped
-built-in entity tree is separately located under `lib/ScoutCoder/entity/`.
+built-in entity tree is separately located under `lib/<workflow>/entity/`.
 
 Entity names and property names must match `[a-z][a-z0-9_]*`; an entity name
 such as `sample_entity` maps to the top-level `::SampleEntity` module. The entity
@@ -284,7 +284,7 @@ example, `#ID,Name`; see Scout-gear's [Working with Entities](https://github.com
 the entity definition file, so registration does not depend on the process's
 current working directory. Draft authoring tasks write entity modules under
 `share/entities/` and property source under `share/entity_properties/`; the
-built-in module/property loader for `lib/ScoutCoder/entity/` is a separate
+built-in module/property loader for `lib/<workflow>/entity/` is a separate
 convention. The TSV header fields are the identifier formats used by
 the entity translation machinery; see the Scout-gear
 [Working with Entities](https://github.com/rbbt-workflows/scout-gear/blob/master/doc/user/WorkingWithEntities.md)
@@ -306,7 +306,7 @@ duplicate rows). Its sorted results include each entity's name, module,
 detected base kind, annotations, formats, identifier files, registered
 properties, effective dispatch, persistence flags, plus inferred source-path
 fields. Source paths are inferred from the conventional
-`lib/ScoutCoder/entity/` layout, not tracked from Ruby's runtime source
+`lib/<workflow>/entity/` layout, not tracked from Ruby's runtime source
 locations, so framework modules report no checkout paths. Effective dispatch
 is inferred from generated method names, so it cannot distinguish the
 original `:single2array` alias from `:single`, or `:array2single` from
@@ -314,8 +314,9 @@ original `:single2array` alias from `:single`, or `:array2single` from
 restricts the listing to that module's own entity constants; the task itself
 exposes no input for it.
 
-Built-in entity definitions and property files are loaded from
-`lib/ScoutCoder/entity/`. Identifier TSV files remain under `share/entity/`;
+Built-in entity definitions and property files live under
+`lib/<workflow>/entity/`; today that tree is empty and no loader reads it.
+Identifier TSV files remain under `share/entity/`;
 they are resource data registered by the generated entity definition. The
 `define_entity` and `define_entity_property` authoring tools instead create
 drafts loaded by Scout-gear's `LiveWorkflow` under `share/entities/` and
@@ -329,8 +330,10 @@ ScoutCoder registers three path kinds on the scout-ai agent path engine:
 `task` (Scout workflow task files), `entity` (Scout entity module files,
 one file per entity) and `entity_property` (entity property files,
 addressed through nested `<entity>/<property>.rb` virtual paths). They
-expose the authoring surfaces in this checkout
-(`lib/ScoutCoder/path_kinds.rb`) as virtual filesystems an agent operates
+expose the authoring surfaces of the current project's own workflow
+(ScoutCoder's own definitions live in `lib/ScoutCoder/path_kinds.rb`;
+the kinds are defined by the workflow of the current directory) as virtual
+filesystems an agent operates
 with the generic `path_*` tools: the `path_kinds` listing tool plus one
 tool per operation — `path_read`, `path_write`, `path_edit`, `path_list`,
 `path_move`, `path_rename`, `path_delete`, `path_validate`, `path_test`,
@@ -345,26 +348,40 @@ contract and the trust boundary — are documented in scout-ai's
 `doc/developer/PathEngine.md` in the scout-ai checkout. This section
 covers what is specific to these three kinds.
 
+The paths are always relative to the :current path map, which is the process
+working directory (ENV['PWD']). In Scout you should always run inferences from
+the base directory of the repository you want to work on, which should contain
+at least a 'workflow.rb' file which is the entry point to load that workflow.
+The name of that workflow should be the one you use when creating tasks or
+helpers.
+
+The project directories were the files get saved should not be included in the
+path engine tools as should not be the file extension either. You have been
+told about them exclusively so you can find them with the Workspace
+tools, but you should forget about them when using the path engine.
+
 ### The two locations
 
 Each kind has two locations: `tmp` (default) holds authoring drafts that
 LiveWorkflow live-loads, and `project` holds promoted copies that nothing
-loads automatically (see `Wiring after promotion` below). Roots are inside
-this checkout and identical in shape across the kinds:
+loads automatically (see `Wiring after promotion` below). Roots follow the
+current project — relative Scout-path declarations are pinned to it once,
+at registration, and every operation authorizes against the pinned roots —
+and are identical in shape across the kinds:
 
 | kind | tmp root (drafts, default) | project root (promoted) | virtual path |
 |---|---|---|---|
-| `task` | `share/tasks` | `lib/ScoutCoder/tasks` | `greet_user.rb` |
-| `entity` | `share/entities` | `lib/ScoutCoder/entity` | `demo_widget.rb` |
-| `entity_property` | `share/entity_properties` | `lib/ScoutCoder/entity` | `demo_widget/tag_palette.rb` |
+| `task` | `share/tasks` | `lib/<workflow>/tasks` | `greet_user.rb` |
+| `entity` | `share/entities` | `lib/<workflow>/entity` | `demo_widget.rb` |
+| `entity_property` | `share/entity_properties` | `lib/<workflow>/entity` | `demo_widget/tag_palette.rb` |
 
 Concrete locations for the example names: a task draft lives at
 `share/tasks/greet_user.rb` and its promoted copy at
-`lib/ScoutCoder/tasks/greet_user.rb`; an entity draft at
+`lib/<workflow>/tasks/greet_user.rb`; an entity draft at
 `share/entities/demo_widget.rb` and its promoted copy at
-`lib/ScoutCoder/entity/demo_widget.rb`; a property draft at
+`lib/<workflow>/entity/demo_widget.rb`; a property draft at
 `share/entity_properties/demo_widget/tag_palette.rb` and its promoted copy
-at `lib/ScoutCoder/entity/demo_widget/tag_palette.rb`.
+at `lib/<workflow>/entity/demo_widget/tag_palette.rb`.
 
 `entity` and `entity_property` deliberately share the project root:
 promoted entity files are flat `<entity>.rb` and promoted property files
@@ -387,8 +404,8 @@ read/write/edit/list/move/rename/delete plus validate/test/smoke/promote.
 `path_validate` performs static shape checks on one file; it never
 executes the target. Checks per kind:
 
-- `task` — the source must parse and carry a `module ScoutCoder` wrapper
-  (task files load into the ScoutCoder workflow module) plus a
+- `task` — the source must parse and carry a `module <workflow>` wrapper
+  (task files load into the <workflow> workflow module) plus a
   `task :name => :type do ... end` declaration. In the `tmp` location
   only, a missing `desc` is a warning, not an error (drafts carry their
   docs in a desc; promoted tasks move it to this README).
@@ -420,14 +437,14 @@ a dispatch on a synthetic entity does not raise. Paired-test locations:
 
 | kind | tmp paired test | project paired test |
 |---|---|---|
-| `task` | `share/test/task/<name>.rb` | `test/ScoutCoder/tasks/test_<name>.rb` |
-| `entity` | `share/test/entity/<name>.rb` | `test/ScoutCoder/entity/test_<name>.rb` |
-| `entity_property` | `share/test/entity_property/<entity>/<entity>.<property>.rb` | `test/ScoutCoder/entity/test_<entity>_<property>.rb` |
+| `task` | `share/test/task/<name>.rb` | `test/<workflow>/tasks/test_<name>.rb` |
+| `entity` | `share/test/entity/<name>.rb` | `test/<workflow>/entity/test_<name>.rb` |
+| `entity_property` | `share/test/entity_property/<entity>/<entity>.<property>.rb` | `test/<workflow>/entity/test_<entity>_<property>.rb` |
 
 The share side carries no `test_` prefix; the project side does, and the
 property test name flattens the nested virtual path. These project-side
 locations are implemented and pinned by the regression suite
-(`test/ScoutCoder/test_path_kinds.rb`) but have no precedent elsewhere in
+(`test/<workflow>/test_path_kinds.rb`) but have no precedent elsewhere in
 the checkout: they are the convention this README records, still awaiting
 explicit ratification — flagged here rather than asserted as settled
 policy.
@@ -435,7 +452,7 @@ policy.
 `path_smoke` runs the same fresh-process workflow load, writes nothing,
 and never runs a Scout job or inference. What it proves differs by kind,
 in increasing strength: `task` is registration-only — it asserts the task
-name appears in `ScoutCoder.tasks` and does NOT execute the task;
+name appears in `<workflow>.tasks` and does NOT execute the task;
 `entity` asserts the module is defined and registered in
 `Entity::MODULES`, with no dispatch; `entity_property` additionally
 performs a real dispatch on a synthetic entity, so the property body
@@ -450,7 +467,7 @@ pass `overwrite: true`, and performs the move itself; the refusal happens
 before the move, so a refused promotion leaves the source file intact.
 After the move the engine runs the kind's post-move hook, which relocates
 the paired test alongside (`share/test/task/greet_user.rb` →
-`test/ScoutCoder/tasks/test_greet_user.rb`, and the entity equivalents).
+`test/<workflow>/tasks/test_greet_user.rb`, and the entity equivalents).
 When the paired-test destination already exists and `overwrite` was not
 passed, the hook reports `post_move: skipped` with a reason and leaves
 both test files in place — the promoted file itself has already moved.
@@ -461,7 +478,7 @@ note below.
 ### Wiring after promotion (read this before promoting)
 
 Promotion is a file move, not registration. Nothing under
-`lib/ScoutCoder/tasks/` or `lib/ScoutCoder/entity/` is loaded
+`lib/<workflow>/tasks/` or `lib/<workflow>/entity/` is loaded
 automatically:
 
 - A promoted task is inert until a wiring line is added to `workflow.rb`,
@@ -469,12 +486,12 @@ automatically:
   task:
 
   ```ruby
-  require_relative 'lib/ScoutCoder/tasks/greet_user'
+  require_relative 'lib/<workflow>/tasks/greet_user'
   ```
 
 - A promoted entity or property file likewise needs its own wiring edit.
   LiveWorkflow loads only `share/` drafts; `workflow.rb` contains no
-  loader for `lib/ScoutCoder/entity/` (that directory does not exist in
+  loader for `lib/<workflow>/entity/` (that directory does not exist in
   the checkout today).
 
 The wire-up is a deliberate source edit in every case; the path tools
@@ -485,7 +502,7 @@ with `document_task` (see `## Testing` below).
 ### Trust boundaries
 
 - Paired-test writes (during `path_test`) and relocation (after
-  `path_promote`) target `share/test/...` and `test/ScoutCoder/...`,
+  `path_promote`) target `share/test/...` and `test/<workflow>/...`,
   which are outside the kind roots. The engine authorizes the operation
   target, not those directories; the hook that writes or moves the paired
   test is trusted plugin code. This is the documented engine trust
@@ -499,8 +516,11 @@ with `document_task` (see `## Testing` below).
   wrong-order draft because they run in a fresh process.
 - Sandboxing is on for all three kinds: `entity` and `entity_property`
   declare `sandbox: true` explicitly, and the `task` kind relies on the
-  engine default, which is `true`. Roots must be absolute, and every
-  operation is authorized against them before any callback runs.
+  engine default, which is `true`. Roots are pinned to absolute paths at
+  registration — the recommended spelling is a relative Scout path such as
+  `Scout.share.tasks` or `Scout.lib['<workflow>'].tasks`, pinned against
+  the current project — and every operation is authorized against those
+  pinned roots before any callback runs.
 
 ### When to use which
 
@@ -531,8 +551,8 @@ The intended loop for one artifact:
 ScoutCoder-authored task tests can be created with `author_task_test` and run
 with `run_task_test`. For a task authored at `share/tasks/<task_name>.rb`, the
 paired test is stored at `share/test/task/<task_name>.rb`. For a built-in task
-in `lib/ScoutCoder/tasks/<file>.rb`, its test is stored at
-`test/ScoutCoder/tasks/test_<file>.rb`. Authoring requires an existing task
+in `lib/<workflow>/tasks/<file>.rb`, its test is stored at
+`test/<workflow>/tasks/test_<file>.rb`. Authoring requires an existing task
 source, validates the name and Ruby syntax, and refuses to overwrite an
 existing test. The runner starts a fresh Ruby process, loads the current
 `workflow.rb` (including the task files it discovers), runs that test, and
@@ -563,7 +583,7 @@ authoring loop for an extension task is `define_task` -> `author_task_test` ->
 `run_task_test`; use `run_task` for interactive debugging after the test passes.
 
 While a task lives under `share/tasks`, its documentation is its `desc`
-declaration. When promoted into `lib/ScoutCoder/tasks`, remove the `desc` and
+declaration. When promoted into `lib/<workflow>/tasks`, remove the `desc` and
 write the documentation into this README's `# Tasks` section with
 `document_task`; do not keep both. The test runner loads the current workflow
 in a fresh Ruby process, but persistent job caches are not cleared
@@ -580,18 +600,18 @@ Create and register an entity module in this checkout
 Inputs: required `entity_name` and trusted Ruby `definition`; optional `base`
 (default `Entity`, or `EntityWorkflow`) and `identifiers` (TSV contents).
 Writes `share/entities/<entity>.rb` and reloads `workflow.rb` to register the
-module. See [Authoring ScoutCoder entities](#authoring-scoutcoder-entities)
+module. See [Authoring <workflow> entities](#authoring-scoutcoder-entities)
 above for the input-body format, identifier-file conventions, limitations,
 and examples.
 
 ## define_entity_property
-Add one property to an existing ScoutCoder entity
+Add one property to an existing <workflow> entity
 
 Inputs: required `entity_name`, `property_name`, and trusted Ruby `definition`
 containing a matching `property :<property_name>` declaration. Writes
 `share/entity_properties/<entity>/<property>.rb`, reloads the workflow, and
 checks that the property is registered. See
-[Authoring ScoutCoder entities](#authoring-scoutcoder-entities) above.
+[Authoring <workflow> entities](#authoring-scoutcoder-entities) above.
 
 ## list_entities
 List all known entity modules and metadata
@@ -602,9 +622,9 @@ framework modules such as `AssociationItem` are listed beside any ScoutCoder
 entities. Each record includes annotations, formats, identifier files,
 properties, inferred source paths, effective dispatch, persistence status, and
 detected base kind. Source paths are inferred from the conventional
-`lib/ScoutCoder/entity/` layout and are absent for framework modules; dispatch
+`lib/<workflow>/entity/` layout and are absent for framework modules; dispatch
 is inferred from generated method names, with the alias limitations described
-in [Authoring ScoutCoder entities](#authoring-scoutcoder-entities) above.
+in [Authoring <workflow> entities](#authoring-scoutcoder-entities) above.
 
 ## task_code
 Inspect a task's source location and source-file text
@@ -780,8 +800,8 @@ Create a test for an existing ScoutCoder-authored task
 
 Inputs: `task_name` and `test_source`. The paired test is written following
 the task's source location: `share/test/task/<task_name>.rb` for tasks
-authored under `share/tasks`, or `test/ScoutCoder/tasks/test_<file>.rb` for
-tasks in `lib/ScoutCoder/tasks`. The task name must match
+authored under `share/tasks`, or `test/<workflow>/tasks/test_<file>.rb` for
+tasks in `lib/<workflow>/tasks`. The task name must match
 `[a-z][a-z0-9_]*`, and the corresponding task source must exist. The source
 is Ruby syntax-checked before writing; an existing test file is never
 overwritten. The test is not run during creation. Use `run_task_test` to
@@ -793,7 +813,7 @@ Run an authored task test in a fresh Ruby process
 Inputs: `task_name` and positive `timeout_seconds` (default 120). Loads the
 current `workflow.rb` (including every authored task file), then executes
 the paired test - `share/test/task/<task_name>.rb` for tasks under `share/tasks`,
-or `test/ScoutCoder/tasks/test_<file>.rb` for tasks in `lib/ScoutCoder/tasks`
+or `test/<workflow>/tasks/test_<file>.rb` for tasks in `lib/<workflow>/tasks`
 - with `lib/` on the Ruby load path. Returns pass/fail, exit status, standard
 output and standard error, timeout status, and the invocation details. A fresh
 Ruby process loads current source and task discovery, but does not clear
@@ -801,7 +821,7 @@ persistent Scout job caches; tests should explicitly clean jobs where
 freshness matters.
 
 ## document_task
-Add or replace a task entry in the ScoutCoder README.md Tasks section
+Add or replace a task entry in the <workflow> README.md Tasks section
 
 Inputs: `task_name` and `documentation`. Replaces the existing
 `## <task_name>` entry, or appends a new entry at the end of the `# Tasks`
@@ -810,7 +830,7 @@ heading.
 
 This is the promotion step for task documentation: an authored task carries
 its documentation in a `desc` while it lives under `share/tasks`, and when it
-is promoted into `lib/ScoutCoder/tasks` the `desc` is removed and the entry is
+is promoted into `lib/<workflow>/tasks` the `desc` is removed and the entry is
 written here with `document_task`. See the Testing and development notes above
 for the promotion loop.
 
@@ -929,3 +949,8 @@ List the workflows installed and available to ScoutCoder
 This task unions `Workflow.installed_workflows`, a purely local scan of the `workflows` pathmap that never triggers network autoinstall, with the workflow modules already loaded in the current process. The combined list is deduplicated and sorted, and the local scan is wrapped in a rescue so the task never crashes.
 
 It is the discovery step for workflow names: any name it returns is usable as the `repo` input of `help_list_repo_documents` and `help_get_repo_document`, which then read the workflow's own `README.md`, `doc*/`, and `research/` documentation.
+
+## reverse
+
+Reverses the input string.
+

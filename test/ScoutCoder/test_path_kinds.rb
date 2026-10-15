@@ -69,6 +69,7 @@ class TestPathKinds < Test::Unit::TestCase
   end
 
   def teardown
+    Dir.chdir(@saved_cwd) if @saved_cwd && Dir.pwd != @saved_cwd
     restore_kind_root
     FileUtils.rm_rf(@sandbox) if @sandbox
     assert_equal @real_before, snapshot_roots(REAL_ROOTS),
@@ -77,10 +78,25 @@ class TestPathKinds < Test::Unit::TestCase
 
   # ---------------------------------------------------------------- helpers
 
-  # Swap ScoutCoder::PATH_KIND_ROOT to the sandbox so the production hook
-  # lambdas derive their paired-test paths inside it.
+  # Swap ScoutCoder::PATH_KIND_ROOT to the sandbox. Kept for the tests that
+  # still exercise PATH_KIND_ROOT semantics (kind-root anchoring, chdir
+  # hooks). NOTE: after the round-9 item-6 refactor the promotion hooks no
+  # longer read PATH_KIND_ROOT for paired-test paths — they resolve through
+  # the Scout path maps (`Scout.share.test...find(:current)`), which the
+  # `:current` map anchors to the process PWD. Sandboxed hook tests that
+  # call the hooks DIRECTLY therefore also need confine_cwd_to_sandbox!.
   def confine_kind_root_to_sandbox!
     swap_kind_root!(@sandbox)
+  end
+
+  # Confine the process working directory to the sandbox so Scout-map
+  # lookups (`:current` map = "{PWD}/...") performed by the promotion hooks
+  # resolve inside the sandbox. This is the direct-hook counterpart of
+  # confine_kind_root_to_sandbox!: PATH_KIND_ROOT governs the kind roots,
+  # the CWD governs the Scout-map test paths. Restored in teardown.
+  def confine_cwd_to_sandbox!
+    @saved_cwd = Dir.pwd
+    Dir.chdir(@sandbox)
   end
 
   def swap_kind_root!(value)
@@ -381,6 +397,7 @@ class TestPathKinds < Test::Unit::TestCase
   # hook_args shape performs exactly one mv and reports it.
   def test_property_hook_direct_invocation_moves_exactly_one_file
     confine_kind_root_to_sandbox!
+    confine_cwd_to_sandbox!
     entity = "hooktest_direct_#{SecureRandom.hex(3)}"
     property = 'hooklabel'
     tmp_paired = File.join(@sandbox, 'share', 'test', 'entity_property', entity, "#{entity}.#{property}.rb")

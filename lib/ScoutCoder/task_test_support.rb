@@ -43,19 +43,19 @@ module ScoutCoder
     def test_source_path(root, name)
       name = validate_task_name(name)
       source = task_source_path(root, name)
-      lib_root = File.join(File.realpath(root), 'lib', 'ScoutCoder', 'tasks')
+      lib_root = File.join(File.realpath(root), 'lib', ScoutCoder.target_workflow_name , 'tasks')
       if source.start_with?(lib_root + File::SEPARATOR)
         relative = source.delete_prefix(lib_root + File::SEPARATOR)
         directory = File.dirname(relative)
         parts = directory == '.' ? [] : directory.split(File::SEPARATOR)
-        safe_child_path(root, 'test', 'ScoutCoder', 'tasks', *parts, "test_#{File.basename(relative)}")
+        safe_child_path(root, 'test', ScoutCoder.target_workflow_name, 'tasks', *parts, "test_#{File.basename(relative)}")
       else
         safe_child_path(root, 'share', 'test', 'task', "#{name}.rb")
       end
     end
 
     def lib_task_source_path(root, name)
-      source_root = safe_child_path(root, 'lib', 'ScoutCoder', 'tasks')
+      source_root = safe_child_path(root, 'lib', ScoutCoder.target_workflow_name, 'tasks')
       return nil unless File.directory?(source_root) && !File.symlink?(source_root)
 
       declaration = /^\s*task\s+:#{Regexp.escape(name)}(?=\s|=>|,|\))/

@@ -35,6 +35,17 @@ file), and no engine file was modified at any point.
 | scout-ai HEAD | `b504275d471a150c6c080df08a6815dce22b797c` ("Fixed issue with test"), porcelain CLEAN before and after every suite | `tmp/path_kinds/round7/baseline/pins.txt`; re-verified end-of-round `containment/out/post_cleanup_listing.txt` |
 | scout-gear HEAD | `23c5b1f3f1071fa6b3938396d83b621fd03bb48d`, porcelain CLEAN | same |
 | engine gate | `lib/scout/llm/agent/path.rb` md5 `e50f4c12faa95d1f142bc81737210c97` — **unchanged start-to-end**; asserted by every `record.sh` header and re-verified in the end-state listings | header of every `tmp/path_kinds/round7/*/out/*.txt` |
+> **Round-9 supersession note (2026-10-14):** the engine pin in this row is
+> historical. The live checkout at the time of round 9 has
+> `lib/scout/llm/agent/path.rb` md5 `2a6a0c9b3e79d37d91e30754b1dc8511` at
+> scout-ai HEAD `e9663f930d401bbba2c752c82cb1a55eb3a827c9` ("Pin agent path
+> roots to configurable Scout maps"), with a dirty tree (`M agent.rb`,
+> `M path.rb`, `M sandbox.rb`). Under that engine, `Agent#resolve_path`
+> raises `NoMethodError: undefined method 'find' for an instance of String`
+> at `path.rb:1137` for the path kinds' `write` operations — the round-7
+> green baseline is not reproducible against it (pre-attributed as engine
+> drift in `tmp/path_kinds/round9_worklist.md` §B.5 and the round-9 test
+> logs). Do not re-pin; treat this row as the round-7 record only.
 | sibling engine files | `path/edit.rb` `20299fc7…`, `path/patch.rb` `310e2f4e…`, `sandbox.rb` `1682020c…` | `tmp/path_kinds/round7/baseline/pins.txt`; `tmp/notes/round7-baseline.files/md5_path_files.out` |
 | ruby | 3.3.1 (2024-04-23 c56cd86388) | `tmp/path_kinds/round7/baseline/pins.txt`; `tmp/notes/round7-baseline.files/env.out` |
 | checkout deliverable | `lib/ScoutCoder/path_kinds.rb` 869 lines, md5 `2739261544bc2b4c5f37b3d9ef2b6135` (`entity` block starts L314, `entity_property` L495) | `tmp/path_kinds/round7/ops5a/out/engine-gate.txt` |
