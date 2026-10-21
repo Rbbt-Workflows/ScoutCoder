@@ -120,7 +120,7 @@ module ScoutCoder
   end
 
   task :help_overview => :text do 
-    agent = self.agent
+    agent = LLM.agent
     agent.system <<-EOF
 You are a software documentation agent. You
 generate documentation for use by AI agents.

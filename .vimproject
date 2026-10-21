@@ -25,13 +25,25 @@ ScoutCoder=/$PWD filter="*.rb *.rake Rakefile *.rdoc *.R *.sh *.js *.haml *.sass
 
   path
   path.documentation
+  path.path_kind_documentation
+
+  path_testing
 
   refactor
+
+
  }
  lib=lib {
   ScoutCoder=ScoutCoder{
    helper_test_support.rb
    path_kinds.rb
+   path_kinds=path_kinds{
+    entity.rb
+    entity_property.rb
+    support.rb
+    task.rb
+    test_file.rb
+			}
    python_task_support.rb
    task_test_support.rb
    tasks=tasks{
