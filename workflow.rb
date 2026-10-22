@@ -22,7 +22,7 @@ ScoutCoder.extend PythonWorkflow
 require_relative 'lib/ScoutCoder/path_kinds' if Scout.root['workflow.rb'].find(:current).exists?
 require_relative 'lib/ScoutCoder/tasks/documentation'
 require_relative 'lib/ScoutCoder/tasks/document_task'
-#require_relative 'lib/ScoutCoder/tasks/workflow_tools'
+require_relative 'lib/ScoutCoder/tasks/workflow_tools'
 require_relative 'lib/ScoutCoder/tasks/task_test_tools'
 require_relative 'lib/ScoutCoder/tasks/python_task_tools'
 #require_relative 'lib/ScoutCoder/tasks/helper_tools'

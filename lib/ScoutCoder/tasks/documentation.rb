@@ -119,6 +119,8 @@ module ScoutCoder
     file.read
   end
 
+  desc 'Generate a guide to the available Scout framework documentation. Expensive; prefer the deterministic listing and retrieval tasks (help_list_repo_documents, help_get_repo_document), using this task only when they cannot localize the topic'
+
   task :help_overview => :text do 
     agent = LLM.agent
     agent.system <<-EOF

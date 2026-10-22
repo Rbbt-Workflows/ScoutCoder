@@ -31,12 +31,16 @@ ScoutCoder=/$PWD filter="*.rb *.rake Rakefile *.rdoc *.R *.sh *.js *.haml *.sass
 
   refactor
 
+  contracts
 
  }
  lib=lib {
   ScoutCoder=ScoutCoder{
    helper_test_support.rb
    path_kinds.rb
+   python_task_support.rb
+   task_test_support.rb
+   test_file_support.rb
    path_kinds=path_kinds{
     entity.rb
     entity_property.rb
@@ -44,8 +48,6 @@ ScoutCoder=/$PWD filter="*.rb *.rake Rakefile *.rdoc *.R *.sh *.js *.haml *.sass
     task.rb
     test_file.rb
 			}
-   python_task_support.rb
-   task_test_support.rb
    tasks=tasks{
     document_task.rb
     documentation.rb
@@ -54,6 +56,7 @@ ScoutCoder=/$PWD filter="*.rb *.rake Rakefile *.rdoc *.R *.sh *.js *.haml *.sass
     list_entities.rb
     python_task_tools.rb
     task_test_tools.rb
+    test_runner_tools.rb
     workflow_tools.rb
    }
   }

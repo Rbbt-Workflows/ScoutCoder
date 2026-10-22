@@ -243,102 +243,103 @@ module ScoutCoder
   # Create new authored task definitions under share/tasks. Keep this trusted
   # code interface with the tooling, not alongside the files it creates.
   # Promoted task: documentation lives in README.md (## define_task), not desc.
-  input :task_name, :string, 'New task identifier (lowercase letters, digits and underscores; starts with a letter)', nil, required: true
-  input :definition, :text, 'Ruby task DSL source: desc/input declarations and a task declaration matching task_name', nil, required: true
-  input :export_type, :string, 'Optionally export the generated task with export or export_exec (none to omit)', 'export'
-  input :workflow, :string, 'Workflow whose share/tasks directory receives the task', 'ScoutCoder'
-  task :define_task => :json do |task_name, definition, export_type, workflow|
-    name = task_name.to_s
-    unless name.match?(/\A[a-z][a-z0-9_]*\z/)
-      raise ParameterException, "define_task validation failed [task_name]: invalid task name '#{name}'; expected [a-z][a-z0-9_]*"
-    end
-    export_type = nil if export_type == 'none'
-    unless export_type.nil? || %w[export export_exec].include?(export_type)
-      raise ParameterException, "define_task validation failed [export_type]: expected 'export', 'export_exec' or 'none', got #{export_type.inspect}"
-    end
-    unless definition.is_a?(String) && !definition.strip.empty?
-      raise ParameterException, 'define_task validation failed [source]: definition must be non-empty Ruby source'
-    end
+  #input :task_name, :string, 'New task identifier (lowercase letters, digits and underscores; starts with a letter)', nil, required: true
+  #input :definition, :text, 'Ruby task DSL source: desc/input declarations and a task declaration matching task_name', nil, required: true
+  #input :export_type, :string, 'Optionally export the generated task with export or export_exec (none to omit)', 'export'
+  #input :workflow, :string, 'Workflow whose share/tasks directory receives the task', 'ScoutCoder'
+  #task :define_task => :json do |task_name, definition, export_type, workflow|
+  #  name = task_name.to_s
+  #  unless name.match?(/\A[a-z][a-z0-9_]*\z/)
+  #    raise ParameterException, "define_task validation failed [task_name]: invalid task name '#{name}'; expected [a-z][a-z0-9_]*"
+  #  end
+  #  export_type = nil if export_type == 'none'
+  #  unless export_type.nil? || %w[export export_exec].include?(export_type)
+  #    raise ParameterException, "define_task validation failed [export_type]: expected 'export', 'export_exec' or 'none', got #{export_type.inspect}"
+  #  end
+  #  unless definition.is_a?(String) && !definition.strip.empty?
+  #    raise ParameterException, 'define_task validation failed [source]: definition must be non-empty Ruby source'
+  #  end
 
-    target_workflow = managed_workflow(workflow)
-    workflow_name = target_workflow.to_s
-    unless workflow_name.match?(/\A[A-Z][A-Za-z0-9_:]*\z/)
-      raise ParameterException, "define_task validation failed [workflow]: invalid workflow module name #{workflow_name.inspect}"
-    end
-    workflow_root = File.expand_path(target_workflow.libdir.to_s)
-    raise ParameterException, "define_task validation failed [workflow]: workflow '#{workflow_name}' has no checkout libdir" if target_workflow.libdir.nil?
-    task_dir = File.join(workflow_root, 'share', 'tasks')
-    FileUtils.mkdir_p(task_dir)
-    target = File.join(task_dir, name + '.rb')
-    unless File.dirname(target) == task_dir && File.basename(target) == "#{name}.rb"
-      raise ParameterException, 'define_task validation failed [path]: task file must remain directly within share/tasks'
-    end
-    if Open.exist?(target) || File.symlink?(target)
-      raise ParameterException, "define_task validation failed [no_overwrite]: task file already exists: #{target}; refusing to overwrite"
-    end
+  #  target_workflow = managed_workflow(workflow)
+  #  workflow_name = target_workflow.to_s
+  #  unless workflow_name.match?(/\A[A-Z][A-Za-z0-9_:]*\z/)
+  #    raise ParameterException, "define_task validation failed [workflow]: invalid workflow module name #{workflow_name.inspect}"
+  #  end
+  #  workflow_root = File.expand_path(target_workflow.libdir.to_s)
+  #  raise ParameterException, "define_task validation failed [workflow]: workflow '#{workflow_name}' has no checkout libdir" if target_workflow.libdir.nil?
+  #  task_dir = File.join(workflow_root, 'share', 'tasks')
+  #  FileUtils.mkdir_p(task_dir)
+  #  target = File.join(task_dir, name + '.rb')
+  #  unless File.dirname(target) == task_dir && File.basename(target) == "#{name}.rb"
+  #    raise ParameterException, 'define_task validation failed [path]: task file must remain directly within share/tasks'
+  #  end
+  #  if Open.exist?(target) || File.symlink?(target)
+  #    raise ParameterException, "define_task validation failed [no_overwrite]: task file already exists: #{target}; refusing to overwrite"
+  #  end
 
-    # Inspect Ruby tokens rather than matching raw text, so comments and string
-    # literals cannot masquerade as a task declaration.
-    tokens = Ripper.lex(definition).reject do |_position, type, _text, _state|
-      %i[on_sp on_ignored_nl on_nl on_comment].include?(type)
-    end
-    declared = tokens.each_with_index.any? do |(_position, type, text, _state), index|
-      next false unless type == :on_ident && text == 'task'
-      previous = tokens[index - 1]
-      next false if previous && %i[on_period on_op].include?(previous[1]) && %w[. &.].include?(previous[2])
-      symbol, identifier = tokens[index + 1, 2]
-      symbol && identifier && symbol[1] == :on_symbeg && symbol[2] == ':' &&
-        identifier[1] == :on_ident && identifier[2] == name
-    end
-    unless declared
-      raise ParameterException, "define_task validation failed [declaration]: source must contain a Ruby task :#{name} declaration (not only a comment or string)"
-    end
+  #  # Inspect Ruby tokens rather than matching raw text, so comments and string
+  #  # literals cannot masquerade as a task declaration.
+  #  tokens = Ripper.lex(definition).reject do |_position, type, _text, _state|
+  #    %i[on_sp on_ignored_nl on_nl on_comment].include?(type)
+  #  end
+  #  declared = tokens.each_with_index.any? do |(_position, type, text, _state), index|
+  #    next false unless type == :on_ident && text == 'task'
+  #    previous = tokens[index - 1]
+  #    next false if previous && %i[on_period on_op].include?(previous[1]) && %w[. &.].include?(previous[2])
+  #    symbol, identifier = tokens[index + 1, 2]
+  #    symbol && identifier && symbol[1] == :on_symbeg && symbol[2] == ':' &&
+  #      identifier[1] == :on_ident && identifier[2] == name
+  #  end
+  #  unless declared
+  #    raise ParameterException, "define_task validation failed [declaration]: source must contain a Ruby task :#{name} declaration (not only a comment or string)"
+  #  end
 
-    source = TaskDefinition.source(name, definition, export_type, workflow_name)
-    unless defined?(RubyVM::InstructionSequence)
-      raise ParameterException, 'define_task validation failed [syntax]: RubyVM::InstructionSequence is unavailable; refusing to write unchecked Ruby source'
-    end
-    begin
-      RubyVM::InstructionSequence.compile(source, target)
-    rescue SyntaxError => error
-      raise ParameterException, "define_task validation failed [syntax]: #{error.message}"
-    end
+  #  source = TaskDefinition.source(name, definition, export_type, workflow_name)
+  #  unless defined?(RubyVM::InstructionSequence)
+  #    raise ParameterException, 'define_task validation failed [syntax]: RubyVM::InstructionSequence is unavailable; refusing to write unchecked Ruby source'
+  #  end
+  #  begin
+  #    RubyVM::InstructionSequence.compile(source, target)
+  #  rescue SyntaxError => error
+  #    raise ParameterException, "define_task validation failed [syntax]: #{error.message}"
+  #  end
 
-    begin
-      # EXCL is the final no-overwrite guard against a concurrent creator.
-      File.open(target, File::WRONLY | File::CREAT | File::EXCL, 0644) { |file| file.write(source) }
-    rescue Errno::EEXIST
-      raise ParameterException, "define_task validation failed [no_overwrite]: task file already exists: #{target}; refusing to overwrite"
-    rescue SystemCallError => error
-      raise ParameterException, "define_task write failed [write]: #{error.message}"
-    end
+  #  begin
+  #    # EXCL is the final no-overwrite guard against a concurrent creator.
+  #    File.open(target, File::WRONLY | File::CREAT | File::EXCL, 0644) { |file| file.write(source) }
+  #  rescue Errno::EEXIST
+  #    raise ParameterException, "define_task validation failed [no_overwrite]: task file already exists: #{target}; refusing to overwrite"
+  #  rescue SystemCallError => error
+  #    raise ParameterException, "define_task write failed [write]: #{error.message}"
+  #  end
 
-    workflow_file = File.join(workflow_root, 'workflow.rb')
-    begin
-      require 'pathname'
-      reloaded_workflow = Dir.chdir(workflow_root) { Workflow.require_workflow_file(Pathname.new(workflow_file)) }
-    rescue StandardError, ScriptError => error
-      raise ParameterException,
-            "define_task reload failed after writing candidate #{target}; " \
-            "workflow entrypoint #{workflow_file} raised #{error.class}: #{error.message}"
-    end
+  #  workflow_file = File.join(workflow_root, 'workflow.rb')
+  #  begin
+  #    require 'pathname'
+  #    reloaded_workflow = Dir.chdir(workflow_root) { Workflow.require_workflow_file(Pathname.new(workflow_file)) }
+  #  rescue StandardError, ScriptError => error
+  #    raise ParameterException,
+  #          "define_task reload failed after writing candidate #{target}; " \
+  #          "workflow entrypoint #{workflow_file} raised #{error.class}: #{error.message}"
+  #  end
 
-    unless reloaded_workflow && reloaded_workflow.tasks.include?(name.to_sym)
-      registered = reloaded_workflow && reloaded_workflow.tasks
-      available = registered ? registered.keys.sort_by(&:to_s).join(', ') : '(workflow unavailable)'
-      raise ParameterException,
-            "define_task registration failed after writing candidate #{target}; " \
-            "workflow #{workflow_file} did not register :#{name}. Available tasks: #{available}"
-    end
+  #  unless reloaded_workflow && reloaded_workflow.tasks.include?(name.to_sym)
+  #    registered = reloaded_workflow && reloaded_workflow.tasks
+  #    available = registered ? registered.keys.sort_by(&:to_s).join(', ') : '(workflow unavailable)'
+  #    raise ParameterException,
+  #          "define_task registration failed after writing candidate #{target}; " \
+  #          "workflow #{workflow_file} did not register :#{name}. Available tasks: #{available}"
+  #  end
 
-    { task: name, workflow: workflow_name, path: target, bytes: source.bytesize,
-      validation: { task_name: 'passed', source: 'passed', declaration: 'passed',
-                    syntax: 'passed', load: 'passed', registration: 'passed',
-                    inspection: 'passed', registration_validation: 'passed' },
-      written: true, overwritten: false }
-  end
+  #  { task: name, workflow: workflow_name, path: target, bytes: source.bytesize,
+  #    validation: { task_name: 'passed', source: 'passed', declaration: 'passed',
+  #                  syntax: 'passed', load: 'passed', registration: 'passed',
+  #                  inspection: 'passed', registration_validation: 'passed' },
+  #    written: true, overwritten: false }
+  #end
 
-  #export :define_task, :list_tasks, :task_inputs, :task_code, :task_dependencies
+  #export :define_task
+  export :list_tasks, :task_inputs, :task_code, :task_dependencies
   export :task_inputs, :task_code, :task_dependencies
   export_exec :run_task, :job_info, :job_status
 end

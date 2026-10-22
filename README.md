@@ -65,6 +65,25 @@ Open.consume_stream io
 
 ```
 
+## See also (verified pointers)
+
+- scout-ai `doc/developer/Sandbox.md` § "Is this tool sandboxed?" — which tools are confined and how the two permission layers relate.
+- scout-ai `doc/developer/PathEngine.md` § "Registering a kind" and "Callback contract and trust boundary" — the engine semantics under [Agent path kinds](#agent-path-kinds).
+- scout-gear `doc/user/WorkingWithEntities.md` § "Format and identifier translation" — entity identifier-file conventions.
+- scout-gear `doc/developer/EntitySystem.md` § "Entity definition" and "Property dispatch" — the entity/property machinery the authoring tools wrap.
+- scout-gear `doc/user/CachingData.md` § "Where persistence lives (ecosystem split)" — where job/Step results actually persist.
+- scout-rig `doc/user/DefiningPythonTasks.md` — the Python task authoring contract behind `define_python_task`.
+- Workspace `doc/user/TSV.md` — TSV task semantics in the Workspace workflow (local doc).
+
+## Contents
+
+- [Development doctrine and tool selection](#development-doctrine-and-tool-selection) — tool table, layered validation, execution vs file authorization, fresh process vs fresh result, promotion.
+- [Layout conventions](#layout-conventions) and [LiveWorkflow](#liveworkflow) — directory layout and the `share/` draft-loading contract.
+- [Authoring ScoutCoder entities](#authoring-scoutcoder-entities) — entity, property and Python task authoring formats.
+- [Agent path kinds](#agent-path-kinds) — kinds and roots, [two locations](#the-two-locations), [validate](#validate), [test_file run_test](#test_file-run_test), [promote](#promote), [wiring after promotion](#wiring-after-promotion-read-this-before-promoting), [trust boundaries](#trust-boundaries), [when to use which](#when-to-use-which).
+- [Testing and execution](#testing-and-execution) — choosing a runner, [authoring and running tests](#authoring-and-running-tests), where job outputs land, [running a task directly](#running-a-task-directly), [documentation during promotion](#documentation-during-promotion).
+- [# Tasks](#tasks) — per-task reference entries: authoring generators, test runners, job inspection, documentation lookup.
+
 ## Development doctrine and tool selection
 
 Use the tool whose responsibility matches the work. ScoutCoder provides Scout-aware discovery and authoring; the Path Engine provides authorized operations on registered virtual resources; Workspace is for general repository edits; task and test runners execute code through the ordinary workflow/process environment.
@@ -76,7 +95,7 @@ Use the tool whose responsibility matches the work. ScoutCoder provides Scout-aw
 | Manage a registered virtual source/test file | `path_kinds`, then `path_read`, `path_write`, `path_edit`, `path_list`, `path_validate`, `path_smoke`, `path_promote` as supported by the kind | Path authorization covers the addressed resource and configured roots |
 | Run a test file | `run_test` for the `test_file` kind; `run_task_test` or `run_helper_test` for their supported conventions | Execution occurs in a fresh process, but `run_test` is deliberately unsandboxed |
 | Exercise a workflow task directly | `run_task` | Uses ordinary Scout job execution; check cache replay and clean the addressed job when needed |
-| Edit existing source, wiring, tests, or docs | Workspace | Inspect the exact diff and retest; do not assume Workspace and workflow tools share an execution sandbox |
+| Edit existing source, wiring, tests, or docs | Workspace | The path tools address ONLY the four registered kinds; for any other file — wiring, docs, data, config — use Workspace. Inspect the exact diff and retest; do not assume Workspace and workflow tools share an execution sandbox |
 
 ### Validation is layered
 
@@ -87,15 +106,15 @@ Use the tool whose responsibility matches the work. ScoutCoder provides Scout-aw
 
 ### Execution is not the same as file authorization
 
-The Path Engine's sandbox and authorization rules constrain operations on virtual resources and their registered roots. They do not, by themselves, confine code launched in a child process. The `run_test` operation authorizes the target test path and then executes trusted test code **unsandboxed**, with the caller's authority. `run_task` dispatches a normal Scout workflow job; do not assume it has an OS sandbox unless a separate execution environment explicitly provides one.
+Path Engine authorization is not a process sandbox, and `run_test` intentionally executes trusted test code unsandboxed; the canonical statement is [Trust boundaries](#trust-boundaries) under [Agent path kinds](#agent-path-kinds), with engine-level semantics in scout-ai `doc/developer/Sandbox.md` § "1. Is this tool sandboxed?" and `doc/developer/PathEngine.md` § "8. Callback contract and trust boundary".
 
-Using `run_task` or `run_test` can avoid the wrong failure mode when a test is being attempted through file-oriented Path Engine operations: execute behavior through the workflow/test runner rather than pretending that a file operation is an execution environment. This is a choice of the proper tool boundary, **not a way to bypass security controls**. Only run trusted code, pass explicit inputs, and test Path Engine authorization separately. A test that passes under `run_test` does not prove the tested code respects Path Engine path restrictions.
+Using `run_task` or `run_test` can avoid the wrong failure mode when a test is being attempted through file-oriented Path Engine operations: execute behavior through the workflow/test runner rather than pretending that a file operation is an execution environment. This is a choice of the proper tool boundary, **not a way to bypass security controls**. Only run trusted code, pass explicit inputs, and test Path Engine authorization separately.
 
-The older built-in Path Engine `test` operation conflated test creation/execution with source-kind operations and obscured this distinction. ScoutCoder's supported design is to manage test files as `test_file` resources and execute them explicitly through `run_test`, or use a relevant specialized task-test runner. Do not depend on `path_test`; the Scout-AI removal patch may still need to be applied in the engine checkout.
+On the removed legacy `path_test` operation, see [Agent path kinds](#agent-path-kinds); do not depend on it in new work.
 
 ### Fresh process versus fresh result
 
-Test runners start a new process to load current source, but Scout's persistent job and Step caches can outlive that process. For a meaningful regression check, establish whether the relevant job was recomputed: use `run_task`'s `clean: true` when appropriate, clean a test's exact job/Step if its result needs refreshing, and inspect the reported replay status and captured output.
+Test runners start a new process, but Scout's persistent job and Step caches outlive it. For a meaningful regression check, establish whether the relevant job was recomputed: use `run_task`'s `clean: true` when appropriate, clean a test's exact job/Step if its result needs refreshing, and inspect the reported replay status. See scout-gear `doc/user/CachingData.md` § "Where persistence lives (ecosystem split)" for where job/Step results actually persist.
 
 ### Change and promotion doctrine
 
@@ -241,8 +260,8 @@ end
 
 For the generated base and identifier setup, pass the body, selected base,
 and TSV contents separately, as shown here. The TSV header fields name its
-identifier formats (e.g. `#ID,Name`); see Scout-gear's [Working with
-Entities](https://github.com/rbbt-workflows/scout-gear/blob/master/doc/user/WorkingWithEntities.md):
+identifier formats (e.g. `#ID,Name`); conventions: scout-gear
+`doc/user/WorkingWithEntities.md` § "Format and identifier translation".
 
 ```ruby
 entity_definition = "annotation :organism, 'Example organism'"
@@ -321,16 +340,17 @@ target workflow module.
 An optional `identifiers` input to `define_entity` is the TSV text to write at
 `share/entity/<entity>.identifiers.tsv`. It must be non-empty and have a header
 accepted by `TSV.parse_header` naming the identifier formats it maps (for
-example, `#ID,Name`; see Scout-gear's [Working with Entities](https://github.com/rbbt-workflows/scout-gear/blob/master/doc/user/WorkingWithEntities.md)). The generated entity definition registers that path with `add_identifiers` at load time. The path is constructed relative to
-the entity definition file, so registration does not depend on the process's
-current working directory. Draft authoring tasks write entity modules under
-`share/entities/` and property source under `share/entity_properties/`; the
-built-in module/property loader for `lib/<workflow>/entity/` is a separate
-convention. The TSV header fields are the identifier formats used by
-the entity translation machinery; see the Scout-gear
-[Working with Entities](https://github.com/rbbt-workflows/scout-gear/blob/master/doc/user/WorkingWithEntities.md)
-documentation for the TSV identifier-file conventions. Supplying identifier
-text also refuses to overwrite an existing identifier file.
+example, `#ID,Name`; identifier-file conventions are documented once in
+scout-gear `doc/user/WorkingWithEntities.md` § "Format and identifier
+translation"). The generated
+entity definition registers that path with `add_identifiers` at load time.
+The path is constructed relative to the entity definition file, so
+registration does not depend on the process's current working directory.
+Draft authoring tasks write entity modules under `share/entities/` and
+property source under `share/entity_properties/`; the built-in
+module/property loader for `lib/<workflow>/entity/` is a separate
+convention. Supplying identifier text also refuses to overwrite an
+existing identifier file.
 
 Use `list_entities` to inspect every entity module known to the process:
 
@@ -382,21 +402,28 @@ tool per operation — `path_read`, `path_write`, `path_edit`, `path_list`,
 `path_move`, `path_rename`, `path_delete`, `path_validate`,
 `path_smoke` and `path_promote` — with no per-kind tool fan-out, plus
 the `test_file`-kind `run_test` custom operation (one extra installed
-tool). ScoutCoder does not register a `test` capability or handler; explicit
-test execution is provided by `run_test`. The Scout-AI engine's older
-built-in `test` operation is slated for removal, but its removal patch may
-still be unapplied in the engine checkout. If a legacy `path_test` tool
-remains visible, do not use or depend on it. Do not register a kind-level
-`test` handler.
+tool). ScoutCoder does not register a `test` capability or handler;
+explicit test execution is provided by `run_test`.
 `path_patch` is not offered for any kind. The kinds travel
 only with the whole-workflow `tool: ScoutCoder` introduction: a task-level
 tool line registers no kinds.
 
+**Canonical note on the removed legacy `path_test`.** The Scout-AI
+engine's older built-in `test` operation conflated test creation and
+execution with source-kind operations and obscured the
+execution-versus-authorization distinction. It is slated for removal, but
+its removal patch may still be unapplied in the engine checkout: if a
+legacy `path_test` tool remains visible, do not use or depend on it, and
+do not register a kind-level `test` handler. ScoutCoder's supported
+design manages test files as `test_file` resources and executes them
+explicitly through `run_test`.
+
 Engine-level semantics — registering a kind, declaring kinds from a
 workflow's `PATH_KINDS` constant, capability normalization, the callback
-contract and the trust boundary — are documented in scout-ai's
-`doc/developer/PathEngine.md` in the scout-ai checkout. This section
-covers what is specific to these four kinds.
+contract and the trust boundary — are documented in scout-ai
+`doc/developer/PathEngine.md` § "3. Registering a kind" and "8. Callback
+contract and trust boundary". This section covers what is specific to
+these four kinds.
 
 The paths are always relative to the :current path map, which is the process
 working directory (ENV['PWD']). In Scout you should always run inferences from
@@ -449,29 +476,11 @@ drafts, and its roots cover unit and integration tests on both sides.
 The virtual path's FIRST segment is the tier — `task`, `entity`,
 `entity_property`, `helper`, or the marker `integration` — and unit vs
 integration is decided purely by that first segment (`integration/...`
-is an integration test; everything else is a unit test). The share side
-keeps the tier spelling and no `test_` prefix
-(`share/test/task/greet_user.rb`,
-`share/test/entity_property/demo/demo.tag.rb`,
-`share/test/integration/rt.rb`); the project side adds the `test_`
-prefix to the FINAL FILENAME and carries intermediate directories
-through unchanged: `test/<workflow>/tasks/test_greet_user.rb`,
-`test/<workflow>/entity/test_demo.rb`, and — the round-10 hierarchical
-layout — `entity_property/demo_widget/tag_palette` →
-`test/<workflow>/entity/demo_widget/test_tag_palette.rb` (the flattened
-`test_<entity>_<property>.rb` spelling is gone: underscore-bearing names
-made it non-invertible).
-The `resolve` and `list` hooks are inverse mappings of one another, so an existing file found by
-`path_list` can be addressed by its virtual spelling and vice versa; the
-only tier-directory rename anywhere is `task` → `tasks` on the project
-side, and `integration` gets the same uniform `test_` prefix as every
-other tier (`test/<workflow>/integration/test_rt.rb`).
-The tier list is open on the tmp side: any first segment other than
-`entity_property` resolves under a same-named directory below
-`share/test` (unknown tiers included); on the project side the known
-tiers (`task`→`tasks`, `entity`, `helper`, `integration`) are rewritten,
-and an unknown first segment resolves under a same-named directory below
-`test/<workflow>`. The documented tiers are the recognized ones.
+is an integration test; everything else is a unit test). The complete
+tier-spelling rules (which side carries the `test_` prefix, which
+directories are renamed, the open-tier rule, and the resolved
+inverse-mapping guarantee) are stated ONCE below with the advisory
+pairing map in [validate](#validate).
 
 **Unit-test path convention is doctrine, not enforcement.** Mirroring the
 tested file's path under the test tree is enforced only through this
@@ -532,13 +541,12 @@ executes the target. Checks per kind:
   `validate`'s reliable check is Ruby SYNTAX (AST parse), with the
   harness/class/prefix checks layered on top as warnings.
 
-ScoutCoder kinds do not register a `test` capability or handler.
 Test files are ordinary `test_file` resources authored with `path_write`;
 execute them explicitly through the kind's `run_test` custom operation
 (see `### test_file run_test` below and the [`## run_test`](#run_test)
-task entry). The engine's legacy built-in `test` operation may still be
-present until the Scout-AI removal patch is applied, but ScoutCoder does
-not depend on it and agents must not use it. The association between a
+task entry; for the removed legacy `path_test` operation see the
+canonical note in the [Agent path kinds](#agent-path-kinds) intro). The
+association between a
 source draft and its paired test is an advisory naming convention: the
 Path Engine promotes exactly ONE resource per `path_promote` call, and
 the source kinds do not register paired-test relocation. Promote the test
@@ -553,12 +561,26 @@ The advisory pairing map is:
 | `helper` | `share/test/helper/<name>.rb` | `test/<workflow>/helpers/test_<name>.rb` |
 | `integration` | `share/test/integration/<name>.rb` | `test/<workflow>/integration/test_<name>.rb` |
 
-The share side carries no `test_` prefix; the project side adds it to the
-FINAL FILENAME only, and intermediate directories are carried through
-unchanged — the project-side `entity_property` test is HIERARCHICAL
-(`test/<workflow>/entity/<entity>/test_<property>.rb`), replacing the
-round-9 flattened `test_<entity>_<property>.rb` spelling that was not
-invertible for underscore-bearing names. The project-side
+**Spelling rule (stated once).** The share side carries no `test_`
+prefix and keeps the tier spelling (`share/test/task/greet_user.rb`,
+`share/test/integration/rt.rb`); the project side adds the `test_`
+prefix to the FINAL FILENAME only, carries intermediate directories
+through unchanged, and renames exactly one tier directory (`task` →
+`tasks`). Concrete examples: `task/greet_user` →
+`test/<workflow>/tasks/test_greet_user.rb`; `entity/demo` →
+`test/<workflow>/entity/test_demo.rb`; `entity_property/demo_widget/tag_palette`
+→ `test/<workflow>/entity/demo_widget/test_tag_palette.rb` (HIERARCHICAL,
+the round-10 layout; the flattened `test_<entity>_<property>.rb`
+spelling is gone: underscore-bearing names made it non-invertible);
+`integration/rt` → `test/<workflow>/integration/test_rt.rb`. The tier
+list is open on the tmp side: any first segment other than
+`entity_property` resolves under a same-named directory below
+`share/test` (unknown tiers included); on the project side the known
+tiers are rewritten, and an unknown first segment resolves under a
+same-named directory below `test/<workflow>`. The documented tiers are
+the recognized ones.
+
+**Convention status.** The project-side
 task/entity/entity_property spellings are implemented and pinned by the
 regression suite (`test/<workflow>/test_path_kinds.rb` and
 `test/<workflow>/test_path_kinds_roundtrip.rb`) but have no
@@ -684,6 +706,9 @@ with `document_task` (see `## Testing` below).
 
 ### When to use which
 
+Rule of thumb: the path tools address ONLY the four registered kinds; for
+any other file — wiring, docs, data, config — use Workspace.
+
 Use the generators to create a draft from scratch —
 [`define_task`](#define_task), [`define_helper`](#define_helper),
 [`define_entity`](#define_entity) and
@@ -694,6 +719,19 @@ path tools to manage the lifecycle of a draft that already exists:
 tools read, edit, validate and promote what is there (plus `run_test` on
 the `test_file` kind; smoke exists on the source kinds only). See
 the `# Tasks` entries for generator input formats.
+
+Worked example, one direction each way:
+
+- Authoring a new task draft `greet_user`: `path_write kind=task
+  path=greet_user` puts it at the right root (`share/tasks/`), with no
+  extension to remember, where `path_validate` checks its shape
+  (`module <workflow>` wrapper plus `task` declaration) and a workflow
+  reload registers it. The Workspace `write` equivalent
+  (`write share/tasks/greet_user.rb`) requires knowing the physical
+  layout, validates nothing, and registers nothing by itself.
+- Editing `workflow.rb` to wire a promoted task: there is no virtual kind
+  for wiring, docs, data or config; use Workspace `read`/`write`/`patch`
+  on the real file and retest from a fresh process.
 
 ### Lifecycle
 
@@ -748,17 +786,19 @@ class MyTaskTest < Test::Unit::TestCase
 end
 ```
 
-`run_test` launches each selected test file in its own fresh Ruby process, loads the checkout's `workflow.rb`, then loads the test file with `lib/` on the load path. It reports per-file exit status, classification (`clean_pass`, `assertion_failure`, `load_error`, `timeout`), test/assertion counts, and captured output. `passed` and `ran` are separate: an assertion failure means the test ran but did not pass; a load error or timeout means it did not complete normally. Default per-file timeout is 120 seconds for `file` and `directory` scopes and 300 seconds for `suite`; the optional timeout is bounded by the task contract.
+`run_test` mechanics (fresh per-file Ruby process, `workflow.rb` load, exit classification, `passed` vs `ran`) are documented once in [`### test_file run_test`](#test_file-run_test) and the [`## run_test`](#run_test) task entry. Both specialized and general test runners start fresh processes, but Scout job/Step results are persistent and are not automatically cleared; see [Fresh process versus fresh result](#fresh-process-versus-fresh-result).
+
+The test-file path convention (a test mirrors its tested file's path under the test tree) is ScoutCoder doctrine, with the pairing map in [Agent path kinds](#agent-path-kinds); scout-rig's suite is the worked example — scout-rig `doc/user/TestingAndPackaging.md` § "Test suite layout mirrors `lib/`" (that document is scout-rig's own build/test/packaging story, not a general conventions reference).
 
 ### Understand execution and sandbox boundaries
 
-The Path Engine authorizes operations on the named virtual resource and its registered roots. That is not an OS process sandbox. `run_test` authorizes the test-file path as a read, then intentionally executes trusted Ruby code **unsandboxed**, with the caller's authority. Expose it only to agents already trusted to execute Ruby in the checkout.
+Path Engine authorization is not a process sandbox, and `run_test` intentionally executes trusted test code unsandboxed; the canonical statement is [Trust boundaries](#trust-boundaries) under [Agent path kinds](#agent-path-kinds), with engine-level semantics in scout-ai `doc/developer/Sandbox.md` § "1. Is this tool sandboxed?" and `doc/developer/PathEngine.md` § "8. Callback contract and trust boundary".
 
 `run_task` executes a normal Scout workflow job. Use it to test task behavior through Scout's standard execution path, not to try to perform arbitrary file operations through a file-oriented tool. Do not assume `run_task` is OS-sandboxed unless a separate runtime boundary explicitly establishes that. `run_task` returns whether a result was replayed; pass `clean: true` when the addressed job must be recomputed.
 
-The distinction can avoid misleading sandbox-related failures: a test that needs ordinary workflow loading or runtime behavior should be run by `run_test` or a normal workflow job by `run_task`, rather than being coupled to Path Engine read/write operations. This is a deliberate choice of execution surface, **not a security bypass**. Timeouts and output capture are operational controls, not process isolation. Only execute trusted code and pass explicit inputs. A successful `run_test` does not establish that the test subject respects Path Engine authorization; test those controls with focused authorization tests.
+The distinction can avoid misleading sandbox-related failures: a test that needs ordinary workflow loading or runtime behavior should be run by `run_test` or a normal workflow job by `run_task`, rather than being coupled to Path Engine read/write operations. Timeouts and output capture are operational controls, not process isolation. Only execute trusted code and pass explicit inputs.
 
-Both specialized and general test runners start fresh processes, but Scout job/Step results are persistent and are not automatically cleared. When freshness matters, clean the exact job/Step (or use `run_task` with `clean: true`) and inspect replay status, state, and output. A test should assert the intended behavior, including error and edge cases where relevant; syntax, registration, and mere process exit are not sufficient evidence of correctness.
+A test should assert the intended behavior, including error and edge cases where relevant; syntax, registration, and mere process exit are not sufficient evidence of correctness.
 
 ### Running a task directly
 
@@ -780,9 +820,13 @@ ScoutCoder.job(:run_task,
 
 Use `job_info` or `job_status` when you already know the workflow, task, and inputs for an existing job and only need to inspect it.
 
+**Where job outputs land.** `run_task` jobs persist under the checkout's `var/jobs/<Workflow>/<task>/<id>/` (relative to the project root of the workflow that ran the job); the result receipt returns the job path, its short path, and the replay status. Inspect without re-running via `job_info`/`job_status`, and pass `clean: true` when a recompute is required instead of hunting for outputs by hand.
+
 ### Documentation during promotion
 
 While a task lives under `share/tasks/`, its documentation is normally in its `desc`. When promoted into `lib/<workflow>/tasks/`, follow the project's convention: remove the draft-only `desc` and document the shipped task in this README's `# Tasks` section with `document_task`. Do not assume this documentation change happens automatically from file promotion.
+
+The `ScoutCoder:` comment convention (see the intro) closes its loop here: promoted `ScoutCoder:` comments are the raw material for `document_task` entries and for repo-documentation improvements. When a comment's fact is settled, move it into the README entry or the relevant repo doc instead of letting discoveries accumulate as comments.
 
 
 # Tasks
@@ -1146,11 +1190,16 @@ This is the lowest-level documentation lookup task. Use it when an agent already
 ## help_overview
 Generate a guide to the available Scout framework documentation
 
-This task builds a synthetic overview by reading the `README.md` and `doc/**/*.md` files of the known Scout repositories and asking an LLM agent to produce a markdown guide for other agents. The result is not a static hand-written file; it is generated from the currently available documentation and can evolve as the source repositories evolve. It aggregates the fixed `REPOS` list only, not installed workflow sources, and it issues one model call over all those documents, so it is relatively expensive: prefer the deterministic listing and retrieval tasks (`help_list_repos`, `help_list_repo_documents`, `help_get_repo_document`) in automated checks.
+Relatively expensive: prefer the deterministic listing and retrieval
+tasks (`help_list_repos`, `help_list_repo_documents`,
+`help_get_repo_document`) in automated checks, and reach for
+`help_overview` only when they cannot localize the topic.
+
+This task builds a synthetic overview by reading the `README.md` and `doc/**/*.md` files of the known Scout repositories and asking an LLM agent to produce a markdown guide for other agents. The result is not a static hand-written file; it is generated from the currently available documentation and can evolve as the source repositories evolve. It aggregates the fixed `REPOS` list only, not installed workflow sources, and it issues one model call over all those documents.
 
 Because the task drives an agent through the Scout-AI agent helper, it needs the agent machinery available in the calling context; in a plain workflow process without that tooling the run fails early.
 
-In practice this is a good first stop when an agent has a broad question such as where to learn about workflows, entities, TSV processing, command execution, or LLM integration. The answer should help narrow the search before calling `help_get_repo_document` on specific files.
+In practice this is useful when an agent has a broad question such as where to learn about workflows, entities, TSV processing, command execution, or LLM integration. The answer should help narrow the search before calling `help_get_repo_document` on specific files.
 
 ## help_workflow
 Return the markdown documentation for a workflow
@@ -1165,8 +1214,9 @@ List the workflows installed and available to ScoutCoder
 This task unions `Workflow.installed_workflows`, a purely local scan of the `workflows` pathmap that never triggers network autoinstall, with the workflow modules already loaded in the current process. The combined list is deduplicated and sorted, and the local scan is wrapped in a rescue so the task never crashes.
 
 It is the discovery step for workflow names: any name it returns is usable as the `repo` input of `help_list_repo_documents` and `help_get_repo_document`, which then read the workflow's own `README.md`, `doc*/`, and `research/` documentation.
+It is the discovery step for workflow names: any name it returns is usable as the `repo` input of `help_list_repo_documents` and `help_get_repo_document`, which then read the workflow's own `README.md`, `doc*/`, and `research/` documentation.
 
 ## reverse
 
-Reverses the input string.
+Footnote (demo/smoke task, not a first-class capability): reverses the input string; exists only to smoke-test the workflow's task machinery.
 

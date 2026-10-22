@@ -3,7 +3,7 @@ require_relative '../path_kinds'
 
 module ScoutCoder
   # Promoted tasks: documentation lives in README.md (## run_test), not desc.
-  input :path, :string, 'Virtual test_file path (tmp-side spelling, e.g. task/greet_user, integration/round_trip, or "." for the suite root)'
+  input :path, :path, 'Virtual test_file path (tmp-side spelling, e.g. task/greet_user, integration/round_trip, or "." for the suite root)'
   input :scope, :select, 'file, directory or suite', 'file', select_options: %w[file directory suite]
   input :location, :select, 'Location of the test files', 'tmp', select_options: %w[tmp project]
   input :timeout_seconds, :integer, 'Per-file timeout in seconds', ScoutCoder::TestFileSupport::FILE_TIMEOUT
