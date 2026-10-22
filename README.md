@@ -80,7 +80,7 @@ Open.consume_stream io
 - [Development doctrine and tool selection](#development-doctrine-and-tool-selection) — tool table, layered validation, execution vs file authorization, fresh process vs fresh result, promotion.
 - [Layout conventions](#layout-conventions) and [LiveWorkflow](#liveworkflow) — directory layout and the `share/` draft-loading contract.
 - [Authoring ScoutCoder entities](#authoring-scoutcoder-entities) — entity, property and Python task authoring formats.
-- [Agent path kinds](#agent-path-kinds) — kinds and roots, [two locations](#the-two-locations), [validate](#validate), [test_file run_test](#test_file-run_test), [promote](#promote), [wiring after promotion](#wiring-after-promotion-read-this-before-promoting), [trust boundaries](#trust-boundaries), [when to use which](#when-to-use-which).
+- [Agent path kinds](#agent-path-kinds) — kinds and roots, [kind locations](#kind-locations), [validate](#validate), [test_file run_test](#test_file-run_test), [promote](#promote), [wiring after promotion](#wiring-after-promotion-read-this-before-promoting), [trust boundaries](#trust-boundaries), [when to use which](#when-to-use-which).
 - [Testing and execution](#testing-and-execution) — choosing a runner, [authoring and running tests](#authoring-and-running-tests), where job outputs land, [running a task directly](#running-a-task-directly), [documentation during promotion](#documentation-during-promotion).
 - [# Tasks](#tasks) — per-task reference entries: authoring generators, test runners, job inspection, documentation lookup.
 
@@ -95,7 +95,7 @@ Use the tool whose responsibility matches the work. ScoutCoder provides Scout-aw
 | Manage a registered virtual source/test file | `path_kinds`, then `path_read`, `path_write`, `path_edit`, `path_list`, `path_validate`, `path_smoke`, `path_promote` as supported by the kind | Path authorization covers the addressed resource and configured roots |
 | Run a test file | `run_test` for the `test_file` kind; `run_task_test` or `run_helper_test` for their supported conventions | Execution occurs in a fresh process, but `run_test` is deliberately unsandboxed |
 | Exercise a workflow task directly | `run_task` | Uses ordinary Scout job execution; check cache replay and clean the addressed job when needed |
-| Edit existing source, wiring, tests, or docs | Workspace | The path tools address ONLY the four registered kinds; for any other file — wiring, docs, data, config — use Workspace. Inspect the exact diff and retest; do not assume Workspace and workflow tools share an execution sandbox |
+| Edit existing source, wiring, tests, or docs | Workspace | The path tools address ONLY the five registered kinds; for any other file — wiring, docs, data, config — use Workspace. Inspect the exact diff and retest; do not assume Workspace and workflow tools share an execution sandbox |
 
 ### Validation is layered
 
@@ -387,12 +387,14 @@ tree expecting the authoring-task loader to discover them.
 
 ## Agent path kinds
 
-ScoutCoder registers four path kinds on the scout-ai agent path engine:
+ScoutCoder registers five path kinds on the scout-ai agent path engine:
 `task` (Scout workflow task files), `entity` (Scout entity module files,
 one file per entity), `entity_property` (entity property files,
-addressed through nested `<entity>/<property>` virtual paths) and
+addressed through nested `<entity>/<property>` virtual paths),
+`python_task` (Scout Python task source files, one `.py` per task) and
 `test_file` (unit and integration test files, addressed through tier
-paths such as `task/greet_user` or `integration/round_trip`). They
+paths such as `task/greet_user`, `integration/round_trip` or
+`python_task/my_task`). They
 expose the authoring surfaces of the current project's own workflow
 (ScoutCoder's own definitions live in `lib/ScoutCoder/path_kinds.rb`;
 the kinds are defined by the workflow of the current directory) as virtual
@@ -423,7 +425,7 @@ workflow's `PATH_KINDS` constant, capability normalization, the callback
 contract and the trust boundary — are documented in scout-ai
 `doc/developer/PathEngine.md` § "3. Registering a kind" and "8. Callback
 contract and trust boundary". This section covers what is specific to
-these four kinds.
+these five kinds.
 
 The paths are always relative to the :current path map, which is the process
 working directory (ENV['PWD']). In Scout you should always run inferences from
@@ -435,14 +437,24 @@ helpers.
 The project directories were the files get saved should not be included in the
 path engine tools as should not be the file extension either. You have been
 told about them exclusively so you can find them with the Workspace
-tools, but you should forget about them when using the path engine.
+tools, but you should forget about them when using the path engine. Paths
+are RELATIVE to the kind root: no physical root prefixes
+(`share/tasks/...`, `lib/<workflow>/...`, `share/python_tasks/...`,
+`python/tasks/...`), no `.rb` or `.py` suffix, and
+`entity_property` paths are nested `<entity>/<property>`. `.` is a root
+selector only for enumeration surfaces (`path_list`, `run_test` suite
+scope); it is not a readable path in `path_read`.
 
-### The two locations
+### Kind locations
 
-Each kind has two locations: `tmp` (default) and `project`. For the three
-source kinds (`task`, `entity`, `entity_property`), `tmp` holds source drafts
-that LiveWorkflow loads; for `test_file`, it holds test resources that are
-never loaded automatically. `path_promote` MOVES one resource from `tmp` to
+Each of the four Ruby-file kinds has two locations: `tmp` (default) and
+`project`. For the four source kinds (`task`, `entity`,
+`entity_property`, `python_task`), `tmp` holds source drafts; only the
+Ruby ones among them are loaded by LiveWorkflow (Python drafts are never
+auto-loaded — registration is the workflow's own `python/tasks`
+discovery, see [Wiring after promotion](#wiring-after-promotion-read-this-before-promoting)). For `test_file`, the locations
+carry test resources that are never loaded automatically; it has THREE
+locations (`tmp`, `project`, `python`). `path_promote` MOVES one resource from `tmp` to
 `project`, where promoted source files are not loaded automatically (see
 `Wiring after promotion` below). Roots follow the current project — relative
 Scout-path declarations are pinned to it once at registration, and every
@@ -453,7 +465,8 @@ operation authorizes against the pinned roots — and are declared per kind:
 | `task` | `share/tasks` | `lib/<workflow>/tasks` | `greet_user` |
 | `entity` | `share/entities` | `lib/<workflow>/entity` | `demo_widget` |
 | `entity_property` | `share/entity_properties` | `lib/<workflow>/entity` | `demo_widget/tag_palette` |
-| `test_file` | `share/test` | `test/<workflow>` | `task/greet_user` |
+| `python_task` | `share/python_tasks` | `python/tasks` | `my_task` |
+| `test_file` | `share/test` | `test/<workflow>` (plus the `python` location `python/test`) | `task/greet_user` |
 
 Concrete physical locations for the example names: a task draft lives at
 `share/tasks/greet_user.rb` and, after promotion, at
@@ -461,8 +474,11 @@ Concrete physical locations for the example names: a task draft lives at
 `share/entities/demo_widget.rb` and, after promotion, at
 `lib/<workflow>/entity/demo_widget.rb`; a property draft at
 `share/entity_properties/demo_widget/tag_palette.rb` and, after promotion,
-at `lib/<workflow>/entity/demo_widget/tag_palette.rb`. Path Engine virtual
-paths omit the physical root and the `.rb` suffix.
+at `lib/<workflow>/entity/demo_widget/tag_palette.rb`; a Python task draft
+at `share/python_tasks/my_task.py` and, after promotion, at
+`python/tasks/my_task.py`. Path Engine virtual
+paths omit the physical root and the file suffix (`.rb` for the Ruby
+kinds, `.py` for `python_task`).
 
 `entity` and `entity_property` deliberately share the project root:
 promoted entity files are flat `<entity>.rb` and promoted property files
@@ -474,13 +490,23 @@ is a validate error, not a second supported shape.
 `test_file` is the odd one out: it manages TEST files, not source
 drafts, and its roots cover unit and integration tests on both sides.
 The virtual path's FIRST segment is the tier — `task`, `entity`,
-`entity_property`, `helper`, or the marker `integration` — and unit vs
-integration is decided purely by that first segment (`integration/...`
-is an integration test; everything else is a unit test). The complete
+`entity_property`, `python_task`, `helper`, or the marker `integration` —
+and unit vs integration is decided purely by that first segment
+(`integration/...` is an integration test; everything else is a unit
+test). The complete
 tier-spelling rules (which side carries the `test_` prefix, which
 directories are renamed, the open-tier rule, and the resolved
 inverse-mapping guarantee) are stated ONCE below with the advisory
 pairing map in [validate](#validate).
+
+The `python_task` tier is exceptional: it lives ONLY at the `python`
+location (`python/test`, `Scout.python.test`) and maps DIRECTLY under
+that root as `test_<name>.py` — the legacy scout-rig convention. The
+tier directory is virtual-only there (no physical `python_task/`
+subdirectory), and a FILE-shaped request for any OTHER tier at the
+`python` location is rejected (`... hosts only the python_task tier`).
+At the Ruby locations `python_task` is an ordinary open tier with the
+generic `.rb` rules; the `python` location is that tier's home.
 
 **Unit-test path convention is doctrine, not enforcement.** Mirroring the
 tested file's path under the test tree is enforced only through this
@@ -496,13 +522,13 @@ within the test tree.
 
 `path_read`, `path_write`, `path_edit`, `path_list`, `path_move`,
 `path_rename` and `path_delete` behave as an exact filesystem view over
-the kind's roots. `patch` is off for all four kinds (whole-file authored
+the kind's roots. `patch` is off for all five kinds (whole-file authored
 sources), and no kind registers a `test` capability.
 
-Capabilities are NOT identical across the four kinds: the three SOURCE
-kinds (`task`, `entity`, `entity_property`) offer validate + smoke +
-promote, while `test_file` offers validate + promote and **no smoke**
-(round-10 decision). For `test_file`, `validate` is the static check and
+Capabilities are NOT identical across the five kinds: the four SOURCE
+kinds (`task`, `entity`, `entity_property`, `python_task`) offer
+validate + smoke + promote, while `test_file` offers validate + promote
+and **no smoke** (round-10 decision). For `test_file`, `validate` is the static check and
 `run_test` is the executing check — `run_test` reports `passed` and the
 exit status separately, so the old "ran OK even if the tests failed"
 smoke verdict was redundant and was removed.
@@ -518,7 +544,9 @@ executes the target. Checks per kind:
   only, a missing `desc` is a warning, not an error (drafts carry their
   docs in a desc; promoted tasks move it to this README).
 - `entity` — the source must parse, the top-level module must match the
-  file name (`demo_widget.rb` → `module DemoWidget`), and the module must
+  file name (`demo_widget.rb` → `module DemoWidget`, with an optional
+  leading `::` — `module ::Gene` is accepted and names the bare
+  constant), and the module must
   contain an `extend Entity` or `extend EntityWorkflow` line. Declaring a
   second top-level module is a warning.
 - `entity_property` — the virtual path must be `<entity>/<property>`
@@ -540,6 +568,16 @@ executes the target. Checks per kind:
   runner reports counts from, and what the regression suite pins, but
   `validate`'s reliable check is Ruby SYNTAX (AST parse), with the
   harness/class/prefix checks layered on top as warnings.
+- `python_task` — static checks only, in order: the file name must match
+  `[a-z][a-z0-9_]*`; the source must be non-empty; it must pass
+  `ast.parse` syntax validation (through a fresh `python -c` child that
+  only parses — the source is never imported, and no `__pycache__` is
+  ever created); and a static AST scan must find a `scout.task(...)`
+  registration call (the scan is a cheap approximation — any module-level
+  `scout.task(...)` call satisfies it; it does not bind names or run
+  code). A missing module docstring is a WARNING at both locations
+  (convention: Python tasks carry their docs in a module docstring;
+  promoted files may move it to README.md per project convention).
 
 Test files are ordinary `test_file` resources authored with `path_write`;
 execute them explicitly through the kind's `run_test` custom operation
@@ -560,6 +598,7 @@ The advisory pairing map is:
 | `entity_property` | `share/test/entity_property/<entity>/<entity>.<property>.rb` | `test/<workflow>/entity/<entity>/test_<property>.rb` |
 | `helper` | `share/test/helper/<name>.rb` | `test/<workflow>/helpers/test_<name>.rb` |
 | `integration` | `share/test/integration/<name>.rb` | `test/<workflow>/integration/test_<name>.rb` |
+| `python_task` | (no tmp-side pair: the tier lives at the `python` location only) | `python/test/test_<name>.py` |
 
 **Spelling rule (stated once).** The share side carries no `test_`
 prefix and keeps the tier spelling (`share/test/task/greet_user.rb`,
@@ -572,6 +611,9 @@ through unchanged, and renames exactly one tier directory (`task` →
 → `test/<workflow>/entity/demo_widget/test_tag_palette.rb` (HIERARCHICAL,
 the round-10 layout; the flattened `test_<entity>_<property>.rb`
 spelling is gone: underscore-bearing names made it non-invertible);
+note the TMP side of `entity_property` keeps its own
+`<entity>/<entity>.<property>.rb` spelling, which differs from the
+source-kind virtual path `<entity>/<property>`;
 `integration/rt` → `test/<workflow>/integration/test_rt.rb`. The tier
 list is open on the tmp side: any first segment other than
 `entity_property` resolves under a same-named directory below
@@ -593,21 +635,26 @@ has no precedent in the checkout. `integration` is round 9's own
 convention on both sides, with the same uniform `test_` prefix as every
 other tier.
 
-`path_smoke` never runs a Scout job or inference. It exists on the three
-SOURCE kinds only (`task`, `entity`, `entity_property`) — the round-9
-contract is "the resource can be
+`path_smoke` never runs a Scout job or inference. It exists on the four
+SOURCE kinds only (`task`, `entity`, `entity_property`, `python_task`)
+— the round-9 contract is "the resource can be
 initialized/constructed/registered", never "it executes":
 `task` loads the real workflow in a fresh process and CONSTRUCTS the
 task's job with placeholder values for its required inputs only, never
 executing it; `entity` asserts the module is defined and registered in
 `Entity::MODULES`, with no dispatch; `entity_property` asserts the
 property is registered on its module and that its accessor resolves to an
-`UnboundMethod` — the property body is never dispatched.
-`test_file` has NO smoke (removed in round 10): the same evidence is
-produced by `run_test`, which actually executes the tests in a fresh
-process and reports `passed`, `ran`, the exit status and the exit
-classification separately — so a FAILING test is visible as a failure,
-not as a passing "it ran" smoke.
+`UnboundMethod` — the property body is never dispatched; `python_task`
+runs a fresh Ruby child that loads the real workflow, registers the draft
+through `PythonWorkflow.load_directory`, and CONSTRUCTS the task's job
+Step with placeholder values for its required inputs only (Python
+requiredness: explicit `required` flag, or no default and not explicitly
+optional) — the task body is never executed, and the metadata run never
+imports the draft. `test_file` has NO smoke (removed in round 10): the
+same evidence is produced by `run_test`, which actually executes the
+tests in a fresh process and reports `passed`, `ran`, the exit status and
+the exit classification separately — so a FAILING test is visible as a
+failure, not as a passing "it ran" smoke.
 
 ### test_file run_test
 
@@ -615,14 +662,38 @@ The `test_file` kind carries one custom operation, `run_test`, exposed to
 the model as its own `run_test` tool. Inputs: `kind` (always
 `test_file`), `path` (the virtual test-file path; `.` selects the whole
 suite), `scope` (`file`, `directory` or `suite`; default `file`), optional
-`location` (`tmp`, the default, or `project`) and optional
-`timeout_seconds` (per-file, default 120). Each test file runs in its own
-fresh Ruby process that loads the checkout's `workflow.rb` from the
-checkout root — so LiveWorkflow live-loads every `share/` draft — and
-then loads the test file. `scope: file` runs exactly one file;
+`location` (`tmp`, the default, `project`, or `python`) and optional
+`timeout_seconds` (per-file, default 120).
+
+**Dispatch by extension.** A `.rb` test file runs in its own
+fresh Ruby process that loads the `workflow.rb` of the project checkout
+that OWNS the test file — so LiveWorkflow live-loads that checkout's
+`share/` drafts — and then loads the test file (see
+[Testing and execution](#testing-and-execution)). A `.py` test file (the `python_task` tier at
+the `python` location) runs in its own fresh Python process:
+`python3 -m unittest <module>` from the checkout owning the test tree,
+with `PYTHONPATH` seeded from `ScoutPython.paths` (so `import scout`
+resolves) and `PYTHONDONTWRITEBYTECODE=1` (no `__pycache__` is ever
+created in the test tree). The standard-library runner serves; Scout-rig
+0.2.6 ships no Python test runner of its own. The same process
+discipline applies as for Ruby: process group, TERM, ten seconds of
+grace, then KILL; per-file timeout 1..3600 seconds. Python exit-code
+semantics map to the shared classes: 0 → `clean_pass`, 1 →
+`assertion_failure` (the test RAN and failed — `passed` is false, `ran`
+is true), 5 (`NO TESTS RAN`) or a zero-test discovery → `load_error`
+(neither passed nor ran).
+
+An explicit
+`PATH_KIND_PROJECT_ROOT` constant (the regression-suite seam) overrides the
+anchor, and the final fallback is the ScoutCoder checkout; the full
+fallback chain is documented in `research/path-kind-contract-fixes.md`.
+The per-file result reports `workflow_loaded`, the absolute path of the
+`workflow.rb` the child loaded (Ruby) or the owning checkout (Python).
+`scope: file` runs exactly one file;
 `scope: directory` runs every test file under a path prefix;
 `scope: suite` (conventionally with `path: "."`) discovers and runs every
-test file in both locations. Empty discovery (no test files found) is an
+test file in both Ruby locations plus the `python` location. Empty
+discovery (no test files found) is an
 error, not a clean zero. Per-file timeouts default to 120s (`file` and
 `directory` scopes) or 300s (`suite` scope), overridable through
 `timeout_seconds`. The result reports, per file, the exit status, a
@@ -667,6 +738,13 @@ automatically:
   LiveWorkflow loads only `share/` drafts; `workflow.rb` contains no
   loader for `lib/<workflow>/entity/` (that directory does not exist in
   the checkout today).
+- A promoted `python_task` file needs no `workflow.rb` line: the
+  workflow's OWN `python/tasks` discovery (seeded from
+  `Scout.python.tasks` across the path maps) picks it up on the next
+  workflow load in a FRESH process. Until that discovery runs — in this
+  process or any other — the promoted file is inert. `share/python_tasks`
+  drafts are never auto-loaded either; smoke registers them explicitly
+  through `PythonWorkflow.load_directory`.
 
 The wire-up is a deliberate source edit in every case; the path tools
 never edit `workflow.rb`. A promoted task also moves its documentation:
@@ -695,9 +773,9 @@ with `document_task` (see `## Testing` below).
   files always load after their entity files (see `## LiveWorkflow` for
   the combined lib/share load order). The smoke hook catches a
   wrong-order draft because it runs in a fresh process.
-- Sandboxing is on for all four kinds: `entity`, `entity_property` and
-  `test_file` declare `sandbox: true` explicitly, and the `task` kind
-  relies on the engine default, which is `true`. Roots are pinned to
+- Sandboxing is on for all five kinds: `entity`, `entity_property` and
+  `test_file` declare `sandbox: true` explicitly, `python_task` and the
+  `task` kind rely on the engine default, which is `true`. Roots are pinned to
   absolute paths at
   registration — the recommended spelling is a relative Scout path such as
   `Scout.share.tasks` or `Scout.lib['<workflow>'].tasks`, pinned against
@@ -706,14 +784,18 @@ with `document_task` (see `## Testing` below).
 
 ### When to use which
 
-Rule of thumb: the path tools address ONLY the four registered kinds; for
+Rule of thumb: the path tools address ONLY the five registered kinds; for
 any other file — wiring, docs, data, config — use Workspace.
 
 Use the generators to create a draft from scratch —
 [`define_task`](#define_task), [`define_helper`](#define_helper),
 [`define_entity`](#define_entity) and
 [`define_entity_property`](#define_entity_property) add the enclosing
-module and scaffolding and refuse to overwrite an existing file. Use the
+module and scaffolding and refuse to overwrite an existing file. (The
+Python equivalents [`define_python_task`](#define_python_task) and
+[`author_python_task_test`](#author_python_task_test) are superseded by
+the `python_task` kind and the `test_file` python tier — see their task
+entries.) Use the
 path tools to manage the lifecycle of a draft that already exists:
 `path_write` stores whole-file content you author, and the remaining
 tools read, edit, validate and promote what is there (plus `run_test` on
@@ -755,7 +837,7 @@ The intended loop for one artifact:
 Choose the runner by what you are trying to establish:
 
 - Use `path_validate` to check a virtual resource's static shape and syntax.
-- Use `path_smoke` on `task`, `entity`, or `entity_property` to verify initialization/registration without executing domain behavior.
+- Use `path_smoke` on `task`, `entity`, `entity_property`, or `python_task` to verify initialization/registration without executing domain behavior.
 - Use `run_test` for a test file managed by the `test_file` kind, including directory or suite scopes.
 - Use `run_task_test` / `run_helper_test` when their specialized authoring-task conventions fit the source.
 - Use `run_task` to exercise a workflow task directly through the normal Scout job system. It is a behavior probe, not a substitute for an assertion-based test.
@@ -766,7 +848,7 @@ Choose the runner by what you are trying to establish:
 Test code is ordinary trusted program code. The general test-file lifecycle is:
 
 1. Create or inspect the source resource and use `path_validate`.
-2. Write the paired test through `path_write` on kind `test_file`. Virtual examples are `task/greet_user`, `entity/demo_widget`, `entity_property/demo_widget/tag_palette`, and `integration/round_trip`. Do not include the physical `share/test/` or `test/<workflow>/` roots or a `.rb` suffix in the virtual path.
+2. Write the paired test through `path_write` on kind `test_file`. Virtual examples are `task/greet_user`, `entity/demo_widget`, `entity_property/demo_widget/tag_palette`, `integration/round_trip`, and `python_task/my_task` (at `location: python`). Do not include the physical `share/test/`, `test/<workflow>/` or `python/test/` roots, or a `.rb`/`.py` suffix, in the virtual path.
 3. Run the test with `run_test` at `scope: file`. Widen to `directory` or `suite` only when a broader check is useful. A zero-file discovery is an error, not a passing empty suite.
 4. For source kinds, separately use `path_smoke` when load/registration needs verification. A passing smoke check does not prove behavior.
 5. If the source and test should be permanent, promote each resource separately with `path_promote`. The engine moves one resource per operation; it does not move its paired test for you.
@@ -786,7 +868,32 @@ class MyTaskTest < Test::Unit::TestCase
 end
 ```
 
-`run_test` mechanics (fresh per-file Ruby process, `workflow.rb` load, exit classification, `passed` vs `ran`) are documented once in [`### test_file run_test`](#test_file-run_test) and the [`## run_test`](#run_test) task entry. Both specialized and general test runners start fresh processes, but Scout job/Step results are persistent and are not automatically cleared; see [Fresh process versus fresh result](#fresh-process-versus-fresh-result).
+A Python test file (the `python_task` tier, written as
+`python_task/<name>` at `location: python` and stored physically as
+`python/test/test_<name>.py`) uses the unittest shape:
+
+```python
+import unittest
+
+class TestMyTask(unittest.TestCase):
+    def test_example(self):
+        self.assertEqual(2, 1 + 1)
+```
+
+`run_test` dispatches on the file extension: `.rb` files run as Ruby
+Test::Unit (fresh Ruby process loading the owning checkout's
+`workflow.rb`), `.py` files as Python unittest (`python3 -m unittest`,
+`PYTHONPATH` from `ScoutPython.paths`, no `__pycache__`). Exit-code
+semantics: Python 0 → `clean_pass`, 1 → `assertion_failure`, 5
+(`NO TESTS RAN`) or zero discovered tests → `load_error`; `passed` and
+`ran` stay separate booleans for both languages. `run_test` mechanics
+(fresh per-file process, anchor contract, exit classification, `passed`
+vs `ran`) are documented once in
+[`### test_file run_test`](#test_file-run_test) and the
+[`## run_test`](#run_test) task entry. Both specialized and general test
+runners start fresh processes, but Scout job/Step results are persistent
+and are not automatically cleared; see
+[Fresh process versus fresh result](#fresh-process-versus-fresh-result).
 
 The test-file path convention (a test mirrors its tested file's path under the test tree) is ScoutCoder doctrine, with the pairing map in [Agent path kinds](#agent-path-kinds); scout-rig's suite is the worked example — scout-rig `doc/user/TestingAndPackaging.md` § "Test suite layout mirrors `lib/`" (that document is scout-rig's own build/test/packaging story, not a general conventions reference).
 
@@ -952,7 +1059,7 @@ Helpers run in a workflow Step context; for tests, declare a disposable task
 that calls the helper and run that task's Step.
 
 ## define_python_task
-Create a Python-backed Scout task source file
+Create a Python-backed Scout task source file (SUPERSEDED — prefer the `python_task` path kind)
 
 Inputs: `task_name`, `python_source`, and optional `workflow` (default
 `ScoutCoder`). The name must match `[a-z][a-z0-9_]*`; submitted Python
@@ -1003,8 +1110,18 @@ inspection or reload fails after creation, the candidate remains on disk for
 inspection; the error identifies that state. This executes trusted Python
 source during metadata inspection.
 
+inspection; the error identifies that state. This executes trusted Python
+source during metadata inspection.
+
+**Superseded by the `python_task` path kind** (round 11), which manages
+the same files with the generic `path_*` operations plus validate, smoke
+and promote: use `path_write kind=python_task path=<name>` to author a
+draft under `share/python_tasks/`, `path_validate` for the static checks,
+and `path_promote` to land it in `python/tasks/`. This task remains
+functional; its removal is the user's decision.
+
 ## author_python_task_test
-Create a Python unit test for an existing Python task file
+Create a Python unit test for an existing Python task file (SUPERSEDED — prefer `path_write kind=test_file` at the `python` location)
 
 Inputs: `task_name` and `test_source`. Requires
 `python/tasks/<task_name>.py`; writes complete Python source unchanged to
@@ -1013,6 +1130,12 @@ Python AST syntax validation (using `PYTHON` or `python3`). Existing targets,
 including symlinks, are never overwritten. The source is not executed or
 otherwise checked as a `unittest` test; this tool does not add Python test
 discovery or execution behavior.
+
+**Superseded by the `test_file` kind's `python` location** (round 11):
+`path_write kind=test_file path=python_task/<name> location=python`
+writes the same `python/test/test_<name>.py` file as a managed resource,
+and `run_test` executes it (previously nothing ran these files). This
+task remains functional; its removal is the user's decision.
 
 ## author_helper_test
 Create a test for an existing ScoutCoder-authored workflow helper
@@ -1062,12 +1185,17 @@ Run test files through the `test_file` path kind
 
 Inputs: `path` (the `test_file` virtual path; `.` for the whole suite),
 `scope` (`file`, `directory` or `suite`; optional, default `file`),
-optional `location` (`tmp` or `project`, default `tmp`), and optional
-`timeout_seconds` (integer 1..3600; default 120 for `file` and `directory`,
-300 for `suite`). The target is resolved through the agent's `test_file`
-kind, then dispatched according to scope. Each selected file runs in its own
-fresh Ruby process, which loads the checkout's `workflow.rb` and then the
-test file, with `lib/` on the load path.
+optional `location` (`tmp`, `project` or `python`, default `tmp`), and
+optional `timeout_seconds` (integer 1..3600; default 120 for `file` and
+`directory`, 300 for `suite`). The target is resolved through the agent's
+`test_file` kind, then dispatched according to scope. Each selected `.rb`
+file runs in its own
+fresh Ruby process, which loads the `workflow.rb` of the project checkout
+that owns the test file (see
+[`### test_file run_test`](#test_file-run_test) for the anchor contract)
+and then the test file, with `lib/` on the load path. Each selected `.py`
+file runs in its own fresh Python process (`python3 -m unittest`), as
+described in [`### test_file run_test`](#test_file-run_test).
 
 **Execution is unsandboxed.** The test path is authorized as a read resource,
 but the child process runs trusted test code with the caller's authority. See
@@ -1215,8 +1343,4 @@ This task unions `Workflow.installed_workflows`, a purely local scan of the `wor
 
 It is the discovery step for workflow names: any name it returns is usable as the `repo` input of `help_list_repo_documents` and `help_get_repo_document`, which then read the workflow's own `README.md`, `doc*/`, and `research/` documentation.
 It is the discovery step for workflow names: any name it returns is usable as the `repo` input of `help_list_repo_documents` and `help_get_repo_document`, which then read the workflow's own `README.md`, `doc*/`, and `research/` documentation.
-
-## reverse
-
-Footnote (demo/smoke task, not a first-class capability): reverses the input string; exists only to smoke-test the workflow's task machinery.
 

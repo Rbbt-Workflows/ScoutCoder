@@ -92,8 +92,11 @@ module ScoutCoder
     # Top-level module names declared by a piece of Ruby source, in order.
     # Used for the shape checks: an entity file declares exactly one
     # top-level module; a property file declares the entity's module.
+    # An optional leading "::" is accepted ("module ::Gene" is legal Ruby
+    # at top level under Kernel#load and still names the bare constant),
+    # so only the BARE name is captured (fix 4, session main.chat#44-48).
     def path_kind_top_level_modules(source)
-      source.scan(/^module\s+([A-Z]\w*)\s*$/).flatten
+      source.scan(/^module\s+(?:::)?([A-Z]\w*)\s*$/).flatten
     end
 
     # First top-level module name declared by the source, or nil.
@@ -158,11 +161,27 @@ module ScoutCoder
     # final segment join exactly as before; project side is uniform.
 
     # Forward leg: validated FILE-shaped segments -> physical relative
-    # path (WITH .rb). Prefix/root shapes map through path_kind_map_prefix.
+    # path (WITH the tier's extension). Prefix/root shapes map through
+    # path_kind_map_prefix.
+    #
+    # Round 11 (python tier): the `python_task` tier lives ONLY at the
+    # 'python' location and maps DIRECTLY under that root as
+    # test_<name>.py — the legacy scout-rig convention
+    # (author_python_task_test writes python/test/test_<name>.py). The
+    # tier directory is VIRTUAL-ONLY at that location, mirroring how the
+    # project side renames task->tasks: one fixed, documented
+    # substitution inside this single mapping authority. At the Ruby
+    # locations the tier is an OPEN tier with the generic .rb rules
+    # (documented as such; the python location is the tier's home).
     def path_kind_map_forward_segments(segments, location)
       tier = segments.first
       file = segments.last
       rest = segments[1..-2]
+
+      if tier == 'python_task' && location.to_s == 'python'
+        return 'test_' + [*(segments[1..-2]), file].join('_') + '.py' if segments.length > 2
+        return 'test_' + file + '.py'
+      end
 
       case location.to_s
       when 'tmp'
@@ -189,10 +208,15 @@ module ScoutCoder
     end
 
     # Prefix shapes (tier selector or nested entity_property/<entity>)
-    # map to their directory, no extension.
+    # map to their directory, no extension. The python tier at the python
+    # location has NO tier directory (files sit directly under the root),
+    # so every prefix of it IS the location root.
     def path_kind_map_prefix(segments, location)
       tier = segments.first
       rest = segments[1..-1]
+
+      return '' if tier == 'python_task' && location.to_s == 'python'
+
       dir =
         if location.to_s == 'project'
           case tier
@@ -207,8 +231,8 @@ module ScoutCoder
     end
 
     # Inverse leg (the list hook's mapping): a physical relative path
-    # (with .rb) under a location root -> virtual path string. Reverses
-    # EXACTLY the forward contract above and nothing else.
+    # (with extension) under a location root -> virtual path string.
+    # Reverses EXACTLY the forward contract above and nothing else.
     #   tmp    : relative == virtual, except entity_property/<e>/<e>.<p>.rb
     #            -> entity_property/<e>/<p> (first-dot split; entity and
     #            property segments may not contain '.', enforced by the
@@ -218,8 +242,27 @@ module ScoutCoder
     #            hierarchy carries the disambiguation: entity virtual
     #            paths are EXACTLY 2 components, grammar-enforced, so a
     #            mid directory under entity/ can only be a property test).
+    #   python : test_<name>.py -> python_task/<name>; a test_<a>_<b>.py
+    #            under a nested directory -> python_task/<a>/<b> ONLY when
+    #            that path resolves back to the same physical file (the
+    #            flat join is ambiguous, so the inverse verifies instead
+    #            of guessing).
     def path_kind_map_back(relative, location)
       raw = relative.to_s
+
+      if location.to_s == 'python'
+        base = raw.sub(/\.py\z/, '')
+        return nil unless base =~ /\Atest_(.+)\z/
+        joined = Regexp.last_match(1)
+        return nil if joined.include?('/')
+        # Flat name: the python tier stores test_<name>.py DIRECTLY under
+        # the python/test root (the legacy scout-rig convention has no
+        # nesting), so a single underscore-bearing name maps back to a
+        # single virtual segment — the ambiguous flat-join case never
+        # arises. python/test is not a per-tier directory tree; any
+        # subdirectory would be outside the convention and is skipped.
+        return "python_task/#{joined}"
+      end
 
       if location.to_s == 'tmp'
         stripped = raw.sub(/\.rb\z/, '')
@@ -361,6 +404,21 @@ module ScoutCoder
       shape =
         if segments.empty?
           :root
+        elsif tier == 'python_task'
+          # Round 11 (python tier): the python_task tier lives flat at the
+          # python location (python/test/test_<name>.py, the legacy
+          # scout-rig convention — one file per tier entry, no nesting),
+          # so it carries the same EXACTLY-2 arity gate as entity/helper:
+          # python_task/<name>.
+          case segments.length
+          when 1
+            :prefix
+          when 2
+            :file
+          else
+            raise ParameterException,
+                  "python_task test path must be python_task/<name> (2 components) or the python_task prefix; got #{segments.length} components: #{raw.inspect}"
+          end
         elsif tier == 'entity_property'
           case segments.length
           when 1, 2
@@ -455,13 +513,31 @@ module ScoutCoder
   def self.path_kind_test_file_definition(workflow_name = target_workflow_name)
     {
     'name' => 'test_file',
-    'description' => "Unit and integration test files for #{target_workflow_name} (drafts in share/test, promoted copies in test/#{target_workflow_name})",
+    'description' =>
+      "Unit and integration test files for #{target_workflow_name} (drafts in share/test, " \
+      "promoted copies in test/#{target_workflow_name}). " \
+      'Virtual paths are relative to the kind root: first segment is the tier ' \
+      '(task, entity, entity_property, helper, integration), e.g. task/greet_user or ' \
+      "integration/round_trip; no .rb suffix, no physical prefix (share/test/, test/#{target_workflow_name}/), " \
+      'and "." is a root selector only for enumeration (path_list, run_test suite scope). ' \
+      'Paired-test tiers: task -> share/test/task/<name>.rb -> test/' + target_workflow_name + '/tasks/test_<name>.rb; ' \
+      'entity -> share/test/entity/<name>.rb -> test/' + target_workflow_name + '/entity/test_<name>.rb; ' \
+      'entity_property -> share/test/entity_property/<entity>/<entity>.<property>.rb -> ' \
+      'test/' + target_workflow_name + '/entity/<entity>/test_<property>.rb (tmp side is ' \
+      '<entity>/<entity>.<property>.rb, NOT <entity>/<property>.rb); ' \
+      'integration -> share/test/integration/<name>.rb -> test/' + target_workflow_name + '/integration/test_<name>.rb.',
     'extension' => 'rb',
-    'locations' => ['tmp', 'project'],
+    'locations' => ['tmp', 'project', 'python'],
     'default_location' => 'tmp',
     'roots' => {
       'tmp' => Scout.share.test,
-      'project' => Scout.root.test[target_workflow_name]
+      'project' => Scout.root.test[target_workflow_name],
+      # Round 11 (python tier): the legacy scout-rig home for Python
+      # tests, python/test/ (author_python_task_test writes
+      # test_<name>.py there). Engine authorization is per-location
+      # root, so this third root is its own grant; the python_task tier
+      # of the virtual grammar maps into it (see the mapping authority).
+      'python' => Scout.python.test
     },
     'sandbox' => true,
     'capabilities' => {
@@ -486,12 +562,18 @@ module ScoutCoder
     'resolve' => lambda do |agent, path, location|
       ScoutCoder.path_kind_resolve_test_file(path, location, agent)
     end,
+    # (Round 11: the resolve hook stays keyed to the production 'test_file'
+    # registration; the empty-suite probe and any differently-named kind
+    # copy must NOT carry this hook — see the regression suite note.)
 
     # Real files under the location root -> virtual spellings, so
     # path_list round-trips with path_read / run_test.
     'list' => lambda do |agent, prefix, location|
       ScoutCoder.path_kind_list_test_files(prefix, location, agent)
     end,
+    # (Round 11, same convention as resolve: the list hook is production-
+    # 'test_file'-keyed; a sandbox copy must drop it too, or its pinned
+    # roots are ignored in favor of the production registration's.)
 
     # Static shape checks; never executes the target.
     'validate' => lambda do |agent, path, location, args|
@@ -510,7 +592,7 @@ module ScoutCoder
 
     'operations' => {
       'run_test' => {
-        'description' => 'Run test files: one file, every file under a path prefix, or the entire suite, each in a fresh Ruby process.',
+        'description' => 'Run test files: one file, every file under a path prefix, or the entire suite, each in a fresh Ruby process. Each child loads the workflow.rb of the project checkout that owns the test file (ENV PATH_KIND_PROJECT_ROOT overrides). Virtual test paths are relative to the test_file kind root: tier/name such as task/greet_user, no .rb suffix, no physical prefix; "." is the suite-root selector.',
         'parameters' => {
           'properties' => {
             'scope' => {'type' => 'string', 'enum' => %w[file directory suite], 'default' => 'file',
@@ -525,6 +607,12 @@ module ScoutCoder
           # kind+path. The old schema required scope AND defaulted it.)
         },
         'implementation' => lambda do |agent, target, args|
+          # Round-11 conformance: derive the DISPATCHED kind from the pinned
+          # root that authorization just validated (target's location root)
+          # rather than a kind name — the engine strips 'kind' from args
+          # before calling here. TestFileSupport resolves suite roots from
+          # `target`, so the empty-root probe and foreign incorporations
+          # enumerate THEIR OWN trees without a name round-trip.
           ScoutCoder::TestFileSupport.run_for_agent(agent, target, args)
         end,
         'authorization' => :read,
@@ -566,6 +654,26 @@ module ScoutCoder
       r
     end
 
+    # Round 11 (python tier): the probe-copy convention (the suite's
+    # sandbox_kind! copies drop the resolve/list hooks, so resolution must
+    # flow through the COPY's pinned roots) needs a root lookup that also
+    # honors a differently-named kind copy. Kept separate from
+    # path_kind_registered_root because the production 'test_file'
+    # preference (with its own-checkout exception) must stay primary for
+    # the real registration.
+    def path_kind_any_registered_root(agent, kind, location)
+      return nil unless agent.respond_to?(:path_kind_definition)
+      defn = (agent.path_kind_definition(kind) rescue nil)
+      return nil unless defn.is_a?(Hash) && defn['roots'].is_a?(Hash)
+      r = defn['roots'][location.to_s]
+      return nil if r.nil?
+      r = r.is_a?(String) ? Path.setup(r) : r
+      own = STRUCTURAL_CHECKOUT
+      resolved = r.find(:current).to_s
+      return nil if resolved == own || resolved.start_with?(own + '/')
+      r
+    end
+
     # Virtual path -> absolute target, per location.
     #
     # Round-10 step 3: the path is FIRST validated against the canonical
@@ -581,22 +689,35 @@ module ScoutCoder
       segments = parsed['segments']
       shape = parsed['shape']
 
-      # Round-10 step 6: prefer the REGISTERED root (registration-time
-      # capture — engine register_path_kind pins it) over recomputing from
-      # the dynamic workflow name, so an incorporation by a differently
-      # named workflow resolves into ITS OWN tree. EXCEPTION: when the
-      # registered root is INSIDE ScoutCoder's own structural checkout
-      # (PATH_KIND_ROOT), the Scout-map dynamic lookup stays primary — that
-      # is the single-registration flow, where the suite's CWD-anchored
+      # Round-10 step 6 (round 11: python added): prefer the REGISTERED
+      # root (registration-time capture — engine register_path_kind pins
+      # it) over recomputing from the dynamic workflow name, so an
+      # incorporation by a differently named workflow resolves into ITS
+      # OWN tree. The own-checkout exception lives in the helper: when the
+      # registered root is INSIDE ScoutCoder's own structural checkout,
+      # nil is returned and the Scout-map dynamic lookup stays primary —
+      # the single-registration flow where the suite's CWD-anchored
       # sandbox (swapped PATH_KIND_ROOT + process CWD) must keep working.
       root = path_kind_registered_root(agent, location)
       root ||=
         case location.to_s
         when 'tmp'    then Scout.share.test
         when 'project' then Scout.root.test[ScoutCoder.target_workflow_name]
+        when 'python' then Scout.python.test
         else
           raise ParameterException, "unknown location for test_file kind: #{location}"
         end
+
+      # Round 11 (python tier): the python location hosts ONLY the
+      # python_task tier; a FILE-shaped request for another tier at that
+      # location is a ParameterException, not a silent generic mapping
+      # (one home per tier, one tier per home). Root and PREFIX selectors
+      # are exempt: suite scope addresses the root, and a foreign-tier
+      # prefix legitimately lists nothing at this location.
+      if location.to_s == 'python' && shape == :file && parsed['tier'] != 'python_task'
+        raise ParameterException,
+              "test_file location 'python' hosts only the python_task tier (got #{parsed['tier'].inspect})"
+      end
 
       case location.to_s
       when 'tmp'
@@ -626,6 +747,16 @@ module ScoutCoder
           base = File.join(root.find(:current).to_s,
                            path_kind_map_prefix(segments, 'project'))
         end
+        candidate = Path.setup(base).find(:current)
+        path_kind_assert_test_file_containment!(candidate, root.find(:current), path, location)
+        candidate
+      when 'python'
+        # Root and prefix selectors both address the location root: the
+        # python tier has no physical tier directory (files sit directly
+        # under python/test), so a file shape maps to test_<name>.py.
+        return root.find(:current) if shape == :root || shape == :prefix
+        base = File.join(root.find(:current).to_s,
+                         path_kind_map_forward_segments(segments, 'python'))
         candidate = Path.setup(base).find(:current)
         path_kind_assert_test_file_containment!(candidate, root.find(:current), path, location)
         candidate
@@ -673,9 +804,37 @@ module ScoutCoder
           Scout.share.test.find(:current)
         when 'project'
           Scout.root.test[ScoutCoder.target_workflow_name].find(:current)
+        when 'python'
+          Scout.python.test.find(:current)
         else
           raise ParameterException, "unknown location for test_file kind: #{location}"
         end
+
+      # Round 11 (python tier): the python location lists ONLY the
+      # python_task tier, directly under its root.
+      if location.to_s == 'python'
+        parsed_tier = parsed['tier']
+        if shape == :file || shape == :prefix
+          # A file/prefix selector for another tier names nothing at this
+          # location: EMPTY (well-formed), matching the missing-tier rule.
+          return [] unless parsed_tier == 'python_task'
+        end
+        physical_dir = root.to_s
+        pattern = File.join(physical_dir, '*.py')
+        virtuals = Dir.glob(pattern).sort.map do |file|
+          relative = file.sub(%r{\A#{Regexp.escape(root.to_s)}/}, '')
+          begin
+            PathKindTestFiles.path_kind_map_back(relative, location)
+          rescue ParameterException
+            nil # physical .py that is not a valid virtual mapping: skip
+          end
+        end.compact.uniq
+        # File/prefix/root selectors all address the same flat directory;
+        # a file selector additionally filters to itself when present.
+        return virtuals.select { |v| v == segments.join('/') } if shape == :file
+        return virtuals
+      end
+
 
       # :file shape — exact file request: [spelling] when the mapped file
       # exists. P2(e) resolution for the LIST direction: when no such file
@@ -779,16 +938,59 @@ module ScoutCoder
       envelope.call(reasons, warnings)
     end
 
-    # Directory the fresh-process children load the workflow from. Default is
-    # the structural checkout anchor; the regression suite overrides it so a
-    # sandboxed draft still loads the REAL workflow.rb. NOT smoke-only: the
-    # aggregator forwards it to `ScoutCoder.child_checkout`, and
+    # Directory the fresh-process children load the workflow from. Anchor
+    # contract (round: path-kinds contract fixes, discharging round-9
+    # deferred item 8): a run_test child loads the workflow.rb of the
+    # project checkout that OWNS the resolved test file. Priority:
+    #   1. ScoutCoder::PATH_KIND_PROJECT_ROOT when set — explicit override;
+    #      the regression suite seam (test_path_kinds.rb) depends on it.
+    #   2. The checkout owning the RESOLVED TEST FILE (marker climb, see
+    #      owner_checkout). This is the session regime: kinds incorporated
+    #      from this structural checkout while the agent works from a
+    #      foreign project — the pinned kind root is ScoutCoder's OWN, so
+    #      it cannot identify the foreign project; the resolved target can.
+    #   3. The pinned kind root's project, when the kinds were registered
+    #      by a FOREIGN project (its pinned root IS that project).
+    #   4. PATH_KIND_ROOT (structural ScoutCoder) when nothing identifies
+    #      a project (e.g. a sandbox file under no checkout).
+    # The aggregator forwards it to `ScoutCoder.child_checkout`, and
     # `TestFileSupport.run_child` calls exactly that (via respond_to?) for
-    # BOTH run_test and (formerly) smoke. Removed once in round 10 by
-    # mistake; the run_test suite failed immediately — kept.
-    def child_checkout
+    # run_test children. Removed once in round 10 by mistake; the run_test
+    # suite failed immediately — kept.
+    def child_checkout(file: nil, pinned_root: nil)
       (ScoutCoder.const_defined?(:PATH_KIND_PROJECT_ROOT, false) &&
-        ScoutCoder::PATH_KIND_PROJECT_ROOT) || ScoutCoder::PATH_KIND_ROOT
+        ScoutCoder::PATH_KIND_PROJECT_ROOT) ||
+        owner_checkout(file) ||
+        pinned_project_root(pinned_root) ||
+        ScoutCoder::PATH_KIND_ROOT
+    end
+
+    # ScoutCoder: a Scout checkout is anchored by `workflow.rb`, and the
+    # framework's own marker climb is Path.caller_lib_dir (scout-essentials
+    # lib/scout/path/find.rb) — Workflow.extended anchors a workflow's
+    # libdir with its default lib/bin/README.md markers, which is why a
+    # foreign checkout without one of those markers has its libdir climbed
+    # PAST it to the enclosing project. Reusing the helper with the
+    # workflow.rb marker finds the owning checkout of any file without a
+    # new marker scheme.
+    def owner_checkout(file)
+      return nil if file.nil? || file.to_s.empty?
+      root = Path.caller_lib_dir(File.dirname(File.expand_path(file.to_s)), ['workflow.rb'])
+      root.nil? || root.to_s.empty? ? nil : root.to_s
+    end
+
+    # Step 3 anchor: the pinned kind root belongs to a foreign project only
+    # when it is NOT inside this structural checkout (same own-checkout
+    # exception as path_kind_registered_root). <project>/share/test -> the
+    # project root; conservative: only accepted when it really is a
+    # workflow checkout (workflow.rb present).
+    def pinned_project_root(pinned_root)
+      return nil if pinned_root.nil? || pinned_root.to_s.empty?
+      resolved = Path.setup(pinned_root.to_s).find(:current).to_s
+      own = STRUCTURAL_CHECKOUT
+      return nil if resolved == own || resolved.start_with?(own + '/')
+      candidate = File.expand_path('../..', resolved)
+      File.exist?(File.join(candidate, 'workflow.rb')) ? candidate : nil
     end
 
     # (Round 10: `smoke_timeout_for` and `path_kind_smoke_test_file` were

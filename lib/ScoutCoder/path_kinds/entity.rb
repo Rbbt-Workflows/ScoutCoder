@@ -18,7 +18,10 @@ module ScoutCoder
   PATH_KIND_ENTITY_DEFINITION = {
       'description' =>
         "Scout entity module files for #{target_workflow_name} (drafts in share/entities, " \
-        "promoted copies in lib/#{target_workflow_name}/entity/<entity>.rb)",
+        "promoted copies in lib/#{target_workflow_name}/entity/<entity>.rb). " \
+        'Virtual paths are relative to the kind root: a bare entity name such as demo_widget, ' \
+        "no .rb suffix and no physical prefix (share/entities/, lib/#{target_workflow_name}/entity/); " \
+        'the file declares a top-level `module <Name>` (`module ::Name` accepted).',
 
       'extension' => 'rb',
       'locations' => ['tmp', 'project'],

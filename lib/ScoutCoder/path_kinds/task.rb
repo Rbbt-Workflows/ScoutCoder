@@ -7,7 +7,9 @@ module ScoutCoder
   PATH_KIND_TASK_DEFINITION = {
       'description' =>
       "Manage the #{target_workflow_name} Scout workflow tasks (drafts in share/tasks, " \
-        "promoted copies in lib/#{target_workflow_name}/tasks)",
+        "promoted copies in lib/#{target_workflow_name}/tasks). " \
+        'Virtual paths are relative to the kind root: a bare name such as greet_user, ' \
+        "no .rb suffix and no physical prefix (share/tasks/, lib/#{target_workflow_name}/tasks/).",
 
       'extension' => 'rb',
       'locations' => ['tmp', 'project'],

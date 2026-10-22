@@ -18,7 +18,9 @@ module ScoutCoder
       'description' =>
         "Scout entity property files for #{target_workflow_name}, nested virtual paths " \
         '<entity>/<property>.rb (drafts in share/entity_properties, promoted ' \
-        "copies in lib/#{target_workflow_name}/entity/<entity>/<property>.rb)",
+        "copies in lib/#{target_workflow_name}/entity/<entity>/<property>.rb). " \
+        'Virtual paths are relative to the kind root and NESTED: <entity>/<property> ' \
+        'such as demo_widget/tag_palette, no .rb suffix and no physical prefix.',
 
       'extension' => 'rb',
       'locations' => ['tmp', 'project'],

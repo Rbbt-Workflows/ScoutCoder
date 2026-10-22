@@ -51,12 +51,16 @@ require 'scout/workflow'
 require 'fileutils'
 require 'open3'
 require 'rbconfig'
+require 'json'
+
+require_relative 'python_task_support'
 
 require_relative 'path_kinds/support'
 require_relative 'path_kinds/test_file'
 require_relative 'path_kinds/task'
 require_relative 'path_kinds/entity'
 require_relative 'path_kinds/entity_property'
+require_relative 'path_kinds/python_task'
 
 module ScoutCoder
   # The shared test-file-finding helpers (formerly ScoutCoder.path_kind_*
@@ -87,6 +91,7 @@ module ScoutCoder
     'task' => PATH_KIND_TASK_DEFINITION,
     'entity' => PATH_KIND_ENTITY_DEFINITION,
     'entity_property' => PATH_KIND_ENTITY_PROPERTY_DEFINITION,
+    'python_task' => PATH_KIND_PYTHON_TASK_DEFINITION,
     'test_file' => PATH_KIND_TEST_FILE_DEFINITION
   }.freeze
 end

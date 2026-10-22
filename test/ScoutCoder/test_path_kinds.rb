@@ -59,7 +59,9 @@ class TestPathKinds < Test::Unit::TestCase
     File.join(ROOT, 'share', 'test', 'entity_property'),
     File.join(ROOT, 'test', 'ScoutCoder', 'entity'),
     File.join(ROOT, 'share', 'test'),
-    File.join(ROOT, 'test', 'ScoutCoder')
+    File.join(ROOT, 'test', 'ScoutCoder'),
+    File.join(ROOT, 'share', 'python_tasks'),
+    File.join(ROOT, 'python', 'tasks')
   ].freeze
 
   def setup
@@ -147,10 +149,16 @@ class TestPathKinds < Test::Unit::TestCase
       # (annotated child, set_extension-safe); a plain String root yields an
       # unannotated File.join String that breaks set_extension.
       'tmp' => Path.setup(File.join(@sandbox, 'share', KIND_TMP_SUBDIR[kind] || 'tasks')),
-      'project' => Path.setup(File.join(@sandbox,
-                                       kind == 'test_file' ? 'test' : 'lib',
-                                       kind == 'test_file' ? 'ScoutCoder' : 'ScoutCoder/entity'))
+      'project' => Path.setup(case kind
+                             when 'test_file' then File.join(@sandbox, 'test', 'ScoutCoder')
+                             when 'python_task' then File.join(@sandbox, 'python', 'tasks')
+                             else File.join(@sandbox, 'lib', 'ScoutCoder', 'entity')
+                             end)
     }
+    # Round 11 (python test tier): the sandbox test_file copy carries the
+    # python location root too, so python-tier cases run against the
+    # sandbox instead of the production python/test tree.
+    copy['roots']['python'] = Path.setup(File.join(@sandbox, 'python', 'test')) if kind == 'test_file'
     # Round-9 smoke contract: the fresh-process child must load the REAL
     # checkout's workflow.rb (task smoke needs the workflow; entity/property
     # smoke need Entity + the module). Drafts still come from the sandbox
@@ -172,6 +180,7 @@ class TestPathKinds < Test::Unit::TestCase
   KIND_TMP_SUBDIR = {
     'entity' => 'entities',
     'entity_property' => 'entity_properties',
+    'python_task' => 'python_tasks',
     'test_file' => 'test'
   }.freeze
 
@@ -185,6 +194,12 @@ class TestPathKinds < Test::Unit::TestCase
   def write_draft(kind, path, content)
     tool('path_write', 'kind' => kind, 'path' => path,
                        'location' => 'tmp', 'content' => content)
+  end
+
+  # Round 11: write with an explicit location (python-tier cases).
+  def write_draft_at(kind, path, content, location)
+    tool('path_write', 'kind' => kind, 'path' => path,
+                       'location' => location, 'content' => content)
   end
 
   # Smoke results come back through the path tool wrapper: a successful hook
@@ -382,15 +397,19 @@ class TestPathKinds < Test::Unit::TestCase
     assert_equal "# paired sentinel #{name}\n", File.read(tmp_paired)
     refute File.exist?(proj_paired), 'engine alone must not create the promoted paired test'
 
-    # Engine endpoint authorization: the primary destination is inside the
-    # sandbox grant (CWD); the paired-test destination is also inside that
-    # grant (engine 4680bd9 authorizes against Dir.pwd, not the kind roots),
-    # while anything OUTSIDE the sandbox grant is denied. The kind-roots
-    # DENIAL premise is a pre-drift expectation; see the test comment.
+    # Engine endpoint authorization (round-11 re-baselined): since the
+    # engine's authorization-root fix (68add84 + the in-flight list/dispatch
+    # threading), path_authorize! authorizes against the KIND'S PINNED ROOT
+    # for the location, not the process CWD. The primary promotion
+    # destination (inside the project root) is authorized; the paired-test
+    # destination (outside every kind root) is DENIED — it was never an
+    # engine-authorized endpoint, and the old "CWD grant" premise was a
+    # pre-drift expectation. Paths outside the grant stay denied.
     assert_nothing_raised do
       @agent.path_authorize!(kind, dst, 'project', mode: :write)
     end
-    assert_nothing_raised do
+    assert_raise(ParameterException,
+                 'paired-test destination is outside the kind roots and must be denied') do
       @agent.path_authorize!(kind, proj_paired, 'project', mode: :write)
     end
     assert_raise(ParameterException) do
@@ -604,6 +623,30 @@ class TestPathKinds < Test::Unit::TestCase
     end
   RUBY
 
+  # Round 11 (python test tier): unittest sources for the python location.
+  PY_TEST_PASS = <<~PY
+    import unittest
+
+    class TestPyPass(unittest.TestCase):
+        def test_ok(self):
+            self.assertEqual(1, 1)
+  PY
+
+  PY_TEST_FAIL = <<~PY
+    import unittest
+
+    class TestPyFail(unittest.TestCase):
+        def test_fails(self):
+            self.assertEqual(1, 2)
+  PY
+
+  TF_FAIL = <<~RUBY
+    require 'test/unit'
+    class TfFailOk < Test::Unit::TestCase
+      def test_fails; assert_equal 1, 2; end
+    end
+  RUBY
+
   def tf_kind!
     confine_kind_root_to_sandbox!
     sandbox_kind!('test_file')
@@ -615,10 +658,27 @@ class TestPathKinds < Test::Unit::TestCase
     File.write(File.join(dir, "#{name}.rb"), source)
   end
 
-  def run_test_call(kind, path, scope, timeout: nil)
+  # Round 11 (python test tier): seed a python-location test (physical
+  # name test_<name>.py under python/test).
+  def py_test_seed(name, source)
+    dir = File.join(@sandbox, 'python', 'test')
+    FileUtils.mkdir_p(dir)
+    File.write(File.join(dir, "test_#{name}.py"), source)
+  end
+
+  def run_test_call(kind, path, scope, timeout: nil, location: nil)
     args = { 'kind' => kind, 'path' => path, 'scope' => scope }
     args['timeout_seconds'] = timeout if timeout
+    args['location'] = location if location
     raw = tool('run_test', args)
+    if raw.is_a?(String) && raw.include?('"exception"')
+      begin
+        parsed = JSON.parse(raw)
+        return parsed if parsed.key?('exception')
+      rescue JSON::ParserError
+        # fall through
+      end
+    end
     Hash === raw ? raw : JSON.parse(raw)
   end
 
@@ -636,7 +696,7 @@ class TestPathKinds < Test::Unit::TestCase
       assert_equal true, caps[op], "#{op} must be enabled"
     end
     %w[patch test smoke].each { |op| refute caps[op], "#{op} must stay off" }
-    assert_equal %w[tmp project], defn.fetch('locations')
+    assert_equal %w[tmp project python], defn.fetch('locations')
     assert defn.fetch('operations').key?('run_test'),
            'operations must register run_test so the aggregated tool installs'
     assert @agent.other_options[:tools].key?('run_test'),
@@ -667,11 +727,22 @@ class TestPathKinds < Test::Unit::TestCase
     assert_equal File.join(@sandbox, 'share', 'test', 'integration', 'rt.rb'), itmp
     # D6 closed: integration gets the uniform test_ prefix
     assert_equal File.join(@sandbox, 'test', 'ScoutCoder', 'integration', 'test_rt.rb'), iproj
+
+    # Round 11 (python tier): the python location hosts the python_task
+    # tier only, flat test_<name>.py under python/test.
+    ytmp = @agent.resolve_path('test_file', 'python_task/greet', 'python').to_s
+    assert_equal File.join(@sandbox, 'python', 'test', 'test_greet.py'), ytmp
+    yus = @agent.resolve_path('test_file', 'python_task/my_task_name', 'python').to_s
+    assert_equal File.join(@sandbox, 'python', 'test', 'test_my_task_name.py'), yus
   end
 
   # 3. list round-trips virtual spellings on the project side.
+  # (Round 11: runs through the SANDBOX kind copy — the engine now resolves
+  # and authorizes every list target against the kind's PINNED root, so
+  # listing through the production kind while seeding a sandbox tree is
+  # denied as outside_grants; the copy's root matches the seeded tree.)
   def test_test_file_list_round_trips_virtual_paths
-    confine_kind_root_to_sandbox!
+    kind = tf_kind!
     proj = File.join(@sandbox, 'test', 'ScoutCoder')
     %w[tasks/greet_user.rb entity/test_demo.rb entity/e/test_p.rb
        integration/test_rt.rb helper/test_helper_tools.rb].each do |rel|
@@ -679,7 +750,7 @@ class TestPathKinds < Test::Unit::TestCase
       File.write(File.join(proj, rel), "# fixture\n")
     end
 
-    listed = @agent.path_list('kind' => 'test_file', 'location' => 'project')
+    listed = @agent.path_list('kind' => kind, 'location' => 'project')
     assert_includes listed, 'task/greet_user'
     assert_includes listed, 'entity/demo'
     assert_includes listed, 'entity_property/e/p'
@@ -874,8 +945,10 @@ class TestPathKinds < Test::Unit::TestCase
   # 20. (round-10 step 5) list honors prefixes: exact descendants only,
   #     empty on well-formed absence, ParameterException on malformed,
   #     file-shaped input, determinism, both locations (D3 regression).
+  # (Round 11: runs through the SANDBOX kind copy — see the note above on
+  # test_test_file_list_round_trips_virtual_paths.)
   def test_test_file_list_honors_prefixes
-    confine_kind_root_to_sandbox!
+    kind = tf_kind!
     tmp_root = File.join(@sandbox, 'share', 'test')
     proj_root = File.join(@sandbox, 'test', 'ScoutCoder')
     # tmp fixtures
@@ -894,7 +967,7 @@ class TestPathKinds < Test::Unit::TestCase
       File.write(path, "# fixture\n")
     end
 
-    list = ->(p, loc) { @agent.path_list('kind' => 'test_file', 'path' => p, 'location' => loc) }
+    list = ->(p, loc) { @agent.path_list('kind' => kind, 'path' => p, 'location' => loc) }
 
     %w[tmp project].each do |loc|
       everything = %w[entity/demo entity_property/e/p helper/helper_tools
@@ -930,11 +1003,32 @@ class TestPathKinds < Test::Unit::TestCase
       # every entry resolves to an existing file under the location root
       root = loc == 'tmp' ? tmp_root : proj_root
       list.call('', loc).each do |v|
-        phys = @agent.resolve_path('test_file', v, loc).to_s
+        phys = @agent.resolve_path(kind, v, loc).to_s
         assert File.file?(phys), "[#{loc}] #{v} must resolve to an existing file"
         assert phys.start_with?(root), "[#{loc}] #{v} resolved outside root: #{phys}"
       end
     end
+
+    # Round 11 (python tier): the python location lists ONLY python_task
+    # spellings, flat under python/test; the legacy test_ prefix is part of
+    # the PHYSICAL spelling, not the virtual one.
+    py_root = File.join(@sandbox, 'python', 'test')
+    FileUtils.mkdir_p(py_root)
+    %w[test_plain.py test_demo_widget.py test_my_task_name.py
+       not_a_test.py].each do |f|
+      File.write(File.join(py_root, f), "# fixture\n")
+    end
+
+    assert_equal %w[python_task/demo_widget python_task/my_task_name
+                    python_task/plain],
+                 list.call('', 'python'), 'python root listing'
+    assert_equal %w[python_task/demo_widget python_task/my_task_name
+                    python_task/plain],
+                 list.call('.', 'python'), 'python dot selector'
+    assert_equal ['python_task/my_task_name'], list.call('python_task/my_task_name', 'python')
+    assert_equal [], list.call('task', 'python'), 'other tier at python is empty, not error'
+    e = assert_raise(ParameterException) { list.call('../escape', 'python') }
+    assert_match(/'..' is not allowed/, e.message)
   end
 
   # 19. (round-10 step 4) arity gates: entity/helper 3-component and
@@ -1062,8 +1156,7 @@ class TestPathKinds < Test::Unit::TestCase
     assert_equal 2, r['count']
     assert_equal false, r['ok'], 'one failing file => overall ok:false'
     assert_equal %w[alpha.rb beta.rb], r['results'].collect { |x| File.basename(x['file']) }.sort
-    assert r['results'].all? { |x| x['ran'] }, 'both files must be reported'
-  end
+    assert r['results'].all? { |x| x['ran'] }, 'both files must be reported'  end
 
   # 13. suite scope discovers BOTH locations; empty sandbox is an error.
   def test_run_test_suite_scope_discovers_both_sides_and_empty_is_error
@@ -1080,12 +1173,26 @@ class TestPathKinds < Test::Unit::TestCase
     assert_equal ['share/test/integration/rt.rb', 'share/test/task/alpha.rb',
                   'test/ScoutCoder/tasks/test_alpha.rb'], tails
 
-    empty = Dir.mktmpdir('r9-empty-suite')
-    Dir.chdir(empty)
-    rr = run_test_call(kind, '.', 'suite')
-    Dir.chdir(@sandbox)
+    # (Round 11: the empty-suite arm no longer chdirs into a foreign mktmpdir.
+    # The engine now authorizes custom-operation paths against the pinned
+    # kind root, so the probe must own EMPTY roots inside the sandbox for
+    # the intended discovery error — not rely on a CWD the root never
+    # covered. A fresh kind copy with empty roots supplies exactly that.)
+    empty_kind = 'test_file_empty_probe'
+    empty_copy = @agent.path_kind_definition('test_file').dup
+    # The copy must be SELF-CONSISTENT: drop the production resolve hook (it
+    # resolves through the 'test_file' registration and would hand back the
+    # REAL roots, which the copy's pinned roots then deny) so resolution
+    # flows through the copy's own pinned roots instead.
+    empty_copy.delete('resolve')
+    empty_copy['roots'] = {
+      'tmp' => Path.setup(File.join(@sandbox, 'empty_suite_tmp')),
+      'project' => Path.setup(File.join(@sandbox, 'empty_suite_proj')),
+      'python' => Path.setup(File.join(@sandbox, 'empty_suite_py'))
+    }
+    @agent.register_path_kind(empty_kind, empty_copy)
+    rr = run_test_call(empty_kind, '.', 'suite')
     assert_match(/no test files found|no test directories found/, rr['exception'].to_s)
-    FileUtils.rm_rf(empty)
   end
 
   # 14. promote rewrites the spelling via resolve; overwrite refusal intact.
@@ -1111,7 +1218,7 @@ class TestPathKinds < Test::Unit::TestCase
   # operation: no capability key, no handler, agent has no path_test tool.
   # Relocation (promotion_post_move) is untouched — see tests above.
   def test_source_kinds_drop_test_operation_but_keep_relocation
-    %w[task entity entity_property].each do |k|
+    %w[task entity entity_property python_task].each do |k|
       raw = ScoutCoder::PATH_KINDS.fetch(k)
       refute raw.fetch('capabilities', {}).key?('test'),
              "#{k} must not declare a 'test' capability"
@@ -1133,11 +1240,261 @@ class TestPathKinds < Test::Unit::TestCase
            'no path_test tool must be installed for the source kinds'
   end
 
+
+  # =====================================================================
+  # python_task kind (round 11) — registration, CRUD, validate, smoke,
+  # promote, containment. Modeled on the task-kind coverage above; the
+  # probes under tmp/path_kinds/round11/kind/ recorded the same matrix
+  # before these permanent tests were written.
+  # =====================================================================
+
+  PY_GOOD = <<~PY
+    '''Fixture task.'''
+    import scout
+
+    def py_fixture(name: str = "World") -> str:
+        return f"hello {name}"
+
+    scout.task(py_fixture)
+  PY
+
+  def py_kind!
+    confine_kind_root_to_sandbox!
+    sandbox_kind!('python_task')
+  end
+
+  def py_seed(name, source = PY_GOOD, location = 'tmp')
+    root = location == 'tmp' ?
+      File.join(@sandbox, 'share', 'python_tasks') :
+      File.join(@sandbox, 'python', 'tasks')
+    target = File.join(root, "#{name}.py")
+    FileUtils.mkdir_p(File.dirname(target))
+    File.write(target, source)
+    target
+  end
+
+  def py_validate(kind, path, location = 'tmp')
+    raw = tool('path_validate', 'kind' => kind, 'path' => path,
+                                 'location' => location)
+    Hash === raw ? raw : JSON.parse(raw)
+  end
+
+  # 1. registration: definition surface, capabilities, pinned roots.
+  def test_python_task_kind_definition_surface
+    raw = ScoutCoder::PATH_KINDS.fetch('python_task')
+    assert_equal %w[tmp project], raw.fetch('locations')
+    assert_equal 'tmp', raw.fetch('default_location')
+    assert_equal 'py', raw.fetch('extension')
+    assert_equal 'project', raw.fetch('promotion_destination')
+    refute raw.fetch('capabilities', {}).key?('patch')
+    refute raw.fetch('capabilities', {}).key?('test')
+
+    defn = @agent.path_kind_definition('python_task')
+    assert defn['roots']['tmp'].to_s.start_with?('/'), 'tmp root pinned absolute'
+    assert defn['roots']['project'].to_s.start_with?('/'), 'project root pinned absolute'
+    assert_match(%r{share/python_tasks\z}, defn['roots']['tmp'].to_s)
+    assert_match(%r{python/tasks\z}, defn['roots']['project'].to_s)
+    %w[read write edit list move rename delete validate smoke promote].each do |op|
+      assert_equal true, defn.fetch('capabilities')[op], "#{op} capability"
+    end
+  end
+
+  # 2. registration idempotence: double incorporation registers once.
+  def test_python_task_registration_idempotent
+    agent = LLM::Agent.new
+    agent.integrate_workflow_path_kinds(ScoutCoder)
+    agent.integrate_workflow_path_kinds(ScoutCoder)
+    kinds = agent.path_kind_registry.keys
+    assert_equal 1, kinds.count('python_task')
+    assert kinds.include?('python_task')
+  end
+
+  # 3. generic CRUD, nested and underscore-bearing names at both locations.
+  def test_python_task_generic_crud_round_trip
+    kind = py_kind!
+    names = %w[crud_probe under_scored2 nested/deep_probe]
+    names.each { |n| write_draft(kind, n, PY_GOOD) }
+    names.each { |n| py_seed(n, PY_GOOD, 'project') }
+
+    listed = @agent.path_list('kind' => kind, 'location' => 'tmp')
+    names.each { |n| assert listed.include?("#{n}.py"), "tmp listing missing #{n}" }    # NOTE (engine 3719551): engine-generic path_list returns entries with
+    # their PHYSICAL extension (.py), unlike the test_file kind's custom
+    # list hook which strips to virtual spellings. Consumers must resolve
+    # the BARE name; a dotted listed spelling double-appends the extension.
+    names.each { |n| assert listed.none? { |p| p =~ /\.py\.py\z/ },
+                    'double-appended extension in listing' }
+    listed_p = @agent.path_list('kind' => kind, 'location' => 'project')
+    names.each { |n| assert listed_p.include?("#{n}.py"), "project listing missing #{n}" }
+
+    # virtual -> physical round-trip through resolve
+    names.each do |n|
+      resolved = @agent.resolve_path(kind, n, 'tmp').to_s
+      assert_equal File.join(@sandbox, 'share', 'python_tasks', "#{n}.py"), resolved
+    end
+    nested = @agent.resolve_path(kind, 'nested/deep_probe', 'project').to_s
+    assert_equal File.join(@sandbox, 'python', 'tasks', 'nested', 'deep_probe.py'), nested
+
+    # read + edit + rename + delete
+    raw = tool('path_read', 'kind' => kind, 'path' => 'crud_probe',
+                           'location' => 'tmp')
+    content = Hash === raw ? raw['content'] : raw
+    assert_equal PY_GOOD, content
+    tool('path_rename', 'kind' => kind, 'path' => 'crud_probe',
+                        'name' => 'crud_renamed')
+    assert File.exist?(File.join(@sandbox, 'share', 'python_tasks', 'crud_renamed.py'))
+    tool('path_delete', 'kind' => kind, 'path' => 'under_scored2')
+    refute File.exist?(File.join(@sandbox, 'share', 'python_tasks', 'under_scored2.py'))
+  end
+
+  # 4. validate matrix.
+  def test_python_task_validate_matrix
+    kind = py_kind!
+    py_seed('val_good')
+    r = py_validate(kind, 'val_good')
+    assert_equal true, r['ok']
+    assert_equal [], r['reasons']
+
+    py_seed('val_empty', "import scout\n\n\n")
+    r = py_validate(kind, 'val_empty')
+    assert_equal false, r['ok']
+    assert r['reasons'].any? { |x| x =~ /scout\.task/ }
+
+    py_seed('val_syntax', "def broken(:\n")
+    r = py_validate(kind, 'val_syntax')
+    assert_equal false, r['ok']
+    assert r['reasons'].any? { |x| x =~ /invalid Python syntax/i }
+
+    # invalid NAME: only reachable through a physical bad file
+    bad = File.join(@sandbox, 'share', 'python_tasks', 'BadName.py')
+    File.write(bad, PY_GOOD)
+    r = py_validate(kind, 'BadName')
+    assert_equal false, r['ok']
+    assert r['reasons'].any? { |x| x =~ /invalid task name/i }
+    File.delete(bad)
+
+    # missing target
+    r = py_validate(kind, 'val_missing')
+    assert_equal false, r['ok']
+    assert r['reasons'].any? { |x| x =~ /does not exist/ }
+
+    # docstring convention is a WARNING at both locations, never an error
+    nodoc_lines = ['import scout', '', 'def val_nodoc(x: int = 1) -> int:',
+                   '    return x', '', 'scout.task(val_nodoc)', '']
+    nodoc = nodoc_lines.join("\n")
+    py_seed('val_nodoc', nodoc)
+    py_seed('val_nodoc', nodoc, 'project')
+    %w[tmp project].each do |loc|
+      r = py_validate(kind, 'val_nodoc', loc)
+      assert_equal true, r['ok'], "nodoc at #{loc}: #{r['reasons'].inspect}"
+      assert r['warnings'].any? { |w| w =~ /module docstring/ }, "warning at #{loc}"
+    end
+
+    # validate is static: no __pycache__ beside any target
+    assert Dir.glob(File.join(@sandbox, '**', '__pycache__')).empty?
+  end
+
+  # 5. smoke: registration + job construction, never execution.
+  def test_python_task_smoke_constructs_job_without_executing
+    kind = py_kind!
+    marker = File.join(@sandbox, 'PY_SMOKE_CANARY')
+    canary = PY_GOOD.sub('return f"hello {name}"',
+                         "open('#{marker}', 'w').write('EXECUTED')\n    return f\"hello {name}\"")
+    py_seed('smoke_canary', canary)
+
+    r = smoke_result(kind: kind, path: 'smoke_canary')
+    assert_equal true, r['ok']
+    assert_equal 'construct', r['stage']
+    assert_equal false, r['executed']
+    assert_match(/SMOKE_OK stage=construct task=py_fixture/, r['stdout'])
+    refute File.exist?(marker), 'task body must never run during smoke'
+    assert Dir.glob(File.join(@sandbox, '**', '__pycache__')).empty?,
+           'smoke must never leave a __pycache__'
+  end
+
+  # 6. smoke failures are clean ParameterExceptions naming the stage.
+  def test_python_task_smoke_failures_raise_with_stage
+    kind = py_kind!
+    py_seed('smoke_noreg', "import scout\n\ndef f(x: int = 1) -> int:\n    return x\n")
+    r = smoke_result(kind: kind, path: 'smoke_noreg')
+    m = r['exception'].to_s + r['message'].to_s
+    assert_match(/smoke: python_task .* failed at stage=register/, m)
+
+    py_seed('smoke_bad', "def broken(:\n")
+    r = smoke_result(kind: kind, path: 'smoke_bad')
+    m = r['exception'].to_s + r['message'].to_s
+    assert_match(/failed at stage=check: .*syntax/i, m)
+
+    r = smoke_result(kind: kind, path: 'smoke_missing')
+    m = r['exception'].to_s + r['message'].to_s
+    assert_match(/failed at stage=check: .*does not exist/, m)
+  end
+
+  # 7. promote matrix: success, no-clobber, overwrite, failure intact.
+  def test_python_task_promote_matrix
+    kind = py_kind!
+    src_root = File.join(@sandbox, 'share', 'python_tasks')
+    dst_root = File.join(@sandbox, 'python', 'tasks')
+    FileUtils.mkdir_p(src_root); FileUtils.mkdir_p(dst_root)
+
+    py_seed('promo_a')
+    r = promote(kind, 'promo_a')
+    assert File.exist?(File.join(dst_root, 'promo_a.py')), 'promoted file present'
+    refute File.exist?(File.join(src_root, 'promo_a.py')), 'draft moved away'
+
+    py_seed('promo_b')
+    File.write(File.join(dst_root, 'promo_b.py'), 'OCCUPIED')
+    r = promote(kind, 'promo_b')
+    assert_match(/exist/i, r['exception'].to_s)
+    assert_equal PY_GOOD, File.read(File.join(src_root, 'promo_b.py')),
+                 'refused promotion leaves the source intact'
+    assert_equal 'OCCUPIED', File.read(File.join(dst_root, 'promo_b.py'))
+
+    r = promote(kind, 'promo_b', overwrite: true)
+    assert_equal PY_GOOD, File.read(File.join(dst_root, 'promo_b.py')),
+                 'overwrite replaces the destination'
+
+    # underscore-bearing name promotes with the same spelling
+    py_seed('under_scored_promo')
+    r = promote(kind, 'under_scored_promo')
+    assert File.exist?(File.join(dst_root, 'under_scored_promo.py'))
+  end
+
+  # 8. containment negatives with outside-root canaries.
+  def test_python_task_containment_rejects_outside_targets
+    kind = py_kind!
+    outside = Dir.mktmpdir('r11-py-containment-outside')
+    canary = File.join(outside, 'canary.txt')
+    File.write(canary, 'R11-PY-CANARY')
+    FileUtils.mkdir_p(File.join(@sandbox, 'share', 'python_tasks'))
+
+    # The path tool wrapper returns raised ScoutExceptions as a JSON String
+    # (see the smoke_result helper note), so denials are asserted on the
+    # returned envelope rather than with assert_raise.
+    r = write_draft(kind, '../escape', PY_GOOD)
+    assert_match(/Path access denied by sandbox/, r.to_s, 'traversal write denied')
+    r = promote(kind, '../../escape')
+    assert_match(/Path access denied by sandbox|not allowed/, r.to_s, 'traversal promote denied')
+
+    link = File.join(@sandbox, 'share', 'python_tasks', 'outside_link')
+    File.symlink(outside, link)
+    # resolve_path alone does not walk the tree (an intermediate symlink
+    # component only realpaths during the authorize walk), so the denial is
+    # asserted through the same tool wrapper as the traversal arms above.
+    r = write_draft(kind, 'outside_link/canary', PY_GOOD)
+    assert_match(/Path access denied by sandbox/, r.to_s, 'symlink escape write denied')
+    r = promote(kind, 'outside_link/canary')
+    assert_match(/Path access denied by sandbox/, r.to_s, 'symlink escape promote denied')
+
+    assert_equal 'R11-PY-CANARY', File.read(canary), 'outside canary untouched'
+  ensure
+    FileUtils.rm_rf(outside) if outside
+  end
+
   # 8.16 README-vs-code lock: the registered kind set is exactly the four
   # kinds the `## Agent path kinds` README section documents, and the
   # run_test custom operation is installed as the model-facing tool.
   def test_registered_kinds_match_readme_documented_set
-    documented = %w[task entity entity_property test_file].sort
+    documented = %w[task entity entity_property python_task test_file].sort
     registered = @agent.path_kind_registry.keys.sort
     assert_equal documented, registered,
                  'PATH_KINDS must match the kinds documented in README ## Agent path kinds'
@@ -1149,5 +1506,107 @@ class TestPathKinds < Test::Unit::TestCase
            'patch must stay off for test_file'
     assert @agent.other_options[:tools].key?('run_test'),
            'the run_test tool must be installed alongside the path tools'
+  end
+end
+
+# =====================================================================
+# Round 11 — python test tier (test_file 'python' location, .py dispatch)
+# =====================================================================
+class TestPathKindsPythonTestTier < TestPathKinds
+  # Reuse the parent harness (sandbox, seeds, run_test_call) so the python
+  # tier cases sit beside their Ruby counterparts; only the assertions are
+  # new. The parent's tests re-run here unchanged, which is exactly the
+  # Ruby-unchanged regression the round asked for.
+
+  def test_python_test_file_scope_pass_and_fail_distinguishable
+    kind = tf_kind!
+    py_test_seed('ok_probe', PY_TEST_PASS)
+    py_test_seed('bad_probe', PY_TEST_FAIL)
+
+    r = run_test_call(kind, 'python_task/ok_probe', 'file', location: 'python')
+    assert_equal 1, r['count']
+    assert_equal true, r['ok']
+    hit = r['results'].first
+    assert_equal 'clean_pass', hit['exit_class']
+    assert_equal true, hit['passed']
+    assert_equal true, hit['ran']
+    assert_match(/python3 -m unittest test_ok_probe/, hit['runner'].to_s)
+
+    f = run_test_call(kind, 'python_task/bad_probe', 'file', location: 'python')
+    assert_equal false, f['ok']
+    bad = f['results'].first
+    assert_equal 'assertion_failure', bad['exit_class']
+    assert_equal false, bad['passed']
+    assert_equal true, bad['ran'], 'a failing python test still RAN'
+    assert_match(/AssertionError|assertEqual/, (bad['stdout'].to_s + bad['stderr'].to_s))
+  end
+
+  def test_python_test_directory_scope_runs_every_file
+    kind = tf_kind!
+    py_test_seed('d1', PY_TEST_PASS)
+    py_test_seed('d2', PY_TEST_FAIL)
+    r = run_test_call(kind, '.', 'directory', location: 'python')
+    assert_equal 2, r['count']
+    assert_equal false, r['ok']
+    assert_equal %w[test_d1.py test_d2.py],
+                 r['results'].collect { |x| File.basename(x['file']) }.sort
+    refute Dir.exist?(File.join(@sandbox, 'python', 'test', '__pycache__')),
+           'python runner must not create __pycache__ in the test tree'
+  end
+
+  def test_python_test_suite_scope_includes_python_location
+    kind = tf_kind!
+    tf_seed('rb_alpha', TF_PASS)
+    py_test_seed('py_alpha', PY_TEST_PASS)
+    r = run_test_call(kind, '.', 'suite')
+    py = r['results'].find { |x| x['file'].end_with?('test_py_alpha.py') }
+    assert py, 'suite scope must discover the python-location test'
+    assert_equal true, py['passed']
+    rb = r['results'].find { |x| x['file'].end_with?('rb_alpha.rb') }
+    assert rb, 'suite scope keeps discovering the tmp-side Ruby test'
+    assert_equal true, rb['passed']
+    assert_equal true, r['ok']
+  end
+
+  def test_python_test_syntax_error_is_load_error_not_silent
+    kind = tf_kind!
+    py_test_seed('syntax_broken', "import unittest\n this is not python\n")
+    r = run_test_call(kind, 'python_task/syntax_broken', 'file', location: 'python')
+    hit = r['results'].first
+    assert_equal 'load_error', hit['exit_class']
+    assert_equal false, hit['passed']
+    assert_equal false, hit['ran']
+  end
+
+  def test_python_test_other_tiers_rejected_at_python_location
+    kind = tf_kind!
+    e = assert_raise(ParameterException) do
+      @agent.resolve_path('test_file', 'task/greet_user', 'python')
+    end
+    assert_match(/hosts only the python_task tier/, e.message)
+  end
+
+  def test_python_test_containment_denies_traversal_and_absolute
+    kind = tf_kind!
+    outside = Dir.mktmpdir('r11-pyt-containment')
+    canary = File.join(outside, 'canary.txt')
+    File.write(canary, 'R11-PYT-CANARY')
+
+    r = write_draft(kind, '../escape', PY_GOOD)
+    assert_match(/denied by sandbox|'..' is not allowed/, r.to_s)
+    r = write_draft_at(kind, 'python_task/x', PY_GOOD, 'python')
+    assert r['written'], 'python tier write lands in the python location'
+    # A python test body at a RUBY tier/tmp is a plain write into that tier's
+    # root — containment holds via the grammar/roots; what is denied at the
+    # python location is foreign-tier addressing only when file-shaped.
+    r = write_draft_at(kind, 'task/x', PY_GOOD, 'tmp')
+    assert r['written'], 'tmp ruby tier holds .rb-named files regardless of body'
+    e = assert_raise(ParameterException) do
+      @agent.resolve_path('test_file', '/etc/passwd', 'python')
+    end
+    assert_match(/absolute|start with/, e.message)
+    assert_equal 'R11-PYT-CANARY', File.read(canary), 'outside canary untouched'
+  ensure
+    FileUtils.rm_rf(outside) if outside
   end
 end
