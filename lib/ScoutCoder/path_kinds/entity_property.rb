@@ -13,6 +13,9 @@ module ScoutCoder
     # Shape: top-level `module <CamelCase(entity segment)>` with at least one
     # `property :name => :type do ... end` and NO extend line (the entity file
     # owns the extend) — entity_tools.rb property_source.
+    # Entity names are CamelCase (canonical; e.g. DemoWidget/palette);
+    # legacy snake_case entity segments (demo_widget/tag_palette) are
+    # accepted with a warning.
     # -------------------------------------------------------------------
   PATH_KIND_ENTITY_PROPERTY_DEFINITION = {
       'description' =>
@@ -20,7 +23,9 @@ module ScoutCoder
         '<entity>/<property>.rb (drafts in share/entity_properties, promoted ' \
         "copies in lib/#{target_workflow_name}/entity/<entity>/<property>.rb). " \
         'Virtual paths are relative to the kind root and NESTED: <entity>/<property> ' \
-        'such as demo_widget/tag_palette, no .rb suffix and no physical prefix.',
+        'such as DemoWidget/palette (the entity segment is CamelCase, canonical; a ' \
+        'legacy snake_case segment such as demo_widget/tag_palette is accepted with a ' \
+        'warning), no .rb suffix and no physical prefix.',
 
       'extension' => 'rb',
       'locations' => ['tmp', 'project'],
@@ -41,7 +46,8 @@ module ScoutCoder
       },
 
       'validate' => lambda do |agent, path, location, args|
-        target = agent.resolve_path('entity_property', path, location)
+        resolve_kind = args['kind'] || 'entity_property'
+        target = agent.resolve_path(resolve_kind, path, location)
         errors, warnings = [], []
 
         unless File.file?(target.to_s)
@@ -65,9 +71,30 @@ module ScoutCoder
         end
 
         if errors.empty?
-          expected = ScoutCoder.path_kind_entity_module_name(entity)
+          # Decision artifact reports/entity-case-convention-decision.md:
+          # the entity segment follows the same naming rules as the entity
+          # kind — CamelCase canonical, legacy snake_case accepted with a
+          # warning (no rename), module compared via constant_name.
+          # Collision candidates are derived from the KIND ROOT, not from
+          # the property file's own directory: on the tmp side the entity
+          # drafts live in the SIBLING share/entities/ directory
+          # (root share/entity_properties -> sibling share/entities), while
+          # the project side shares the entity root itself
+          # (lib/<workflow>/entity holds both <Entity>.rb and
+          # <Entity>/<prop>.rb). First existing wins.
+          kind_root = agent.path_kind_definition(resolve_kind)
+                         .fetch('roots').fetch(location.to_s, nil)
+          kind_root = agent.path_kind_definition(resolve_kind)
+                         .fetch('roots').fetch('tmp', nil) if kind_root.nil?
+          sibling_entities_root = [
+            File.join(File.dirname(kind_root.to_s), 'entities'),
+            kind_root.to_s
+          ].find { |candidate| File.directory?(candidate) }
+          expected = ScoutCoder::EntityDefinitionSupport.validate_entity_type_name!(
+            entity, sibling_entities_root, errors, warnings, 'entity name'
+          )
           declared = ScoutCoder.path_kind_top_level_module(content)
-          unless declared == expected
+          if expected && declared != expected
             errors << "top-level module must be `#{expected}` (from entity segment); found #{declared ? "`#{declared}`" : 'none'}"
           end
           if content =~ /^\s*extend\s+(Entity|EntityWorkflow)\s*$/

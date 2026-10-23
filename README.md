@@ -72,7 +72,6 @@ Open.consume_stream io
 - scout-gear `doc/user/WorkingWithEntities.md` § "Format and identifier translation" — entity identifier-file conventions.
 - scout-gear `doc/developer/EntitySystem.md` § "Entity definition" and "Property dispatch" — the entity/property machinery the entity path kinds' validators check against.
 - scout-gear `doc/user/CachingData.md` § "Where persistence lives (ecosystem split)" — where job/Step results actually persist.
-- scout-rig `doc/user/DefiningPythonTasks.md` — the Python task authoring contract behind `define_python_task`.
 - Workspace `doc/user/TSV.md` — TSV task semantics in the Workspace workflow (local doc).
 
 ## Contents
@@ -140,9 +139,9 @@ Do not commit, push, or merge unless explicitly asked. Report the actual checks 
   `lib/ScoutCoder/entity/` (currently empty), the entity-authoring
   support consumed by `list_entities` (`tasks/entity_tools.rb`), and the
   shared runner/support modules (`test_file_support.rb`,
-  `probe_support.rb`, `python_task_support.rb`, plus the legacy
-  `task_test_support.rb` / `helper_test_support.rb` used only by the
-  unimported task_test/helper_tools task files).
+  `probe_support.rb`, `python_task_support.rb`; the legacy task-test and
+  helper-test supports were retired in round 13 together with their
+  unimported task files).
 - `share/` - the authoring-drafts convention. `share/tasks/`,
   `share/helpers/`, `share/entities/` and `share/entity_properties/` hold
   draft definitions loaded live by Scout-gear's `LiveWorkflow` on every
@@ -231,18 +230,37 @@ kind=entity_property path=<entity>/<property>` writes
 workflow reload; the shipped built-in entity tree is separately located
 under `lib/<workflow>/entity/` and is not loaded today.
 
-Entity names and property names must match `[a-z][a-z0-9_]*`; an entity
-name such as `sample_entity` maps to the top-level `::SampleEntity`
-module. The entity base is the `extend Entity` (or `extend
+Entity-TYPE names are CamelCase: they must match `[A-Z][A-Za-z0-9]*` (e.g.
+`DemoWidget`, or the all-caps acronym `TF`); a name such as `DemoWidget`
+maps to the top-level `::DemoWidget` module. Property names stay
+snake_case (`[a-z][a-z0-9_]*`).
+
+LEGACY ACCEPTANCE: an old-pattern snake_case entity name
+(`[a-z][a-z0-9_]*`, e.g. `demo_widget`) still validates, with a warning
+that names both spellings; the virtual path keeps the user's spelling
+(`share/entities/demo_widget.rb` stays `demo_widget`), and the module
+constant is the Rule-B camelization — `demo_widget`.split('_').
+map(&:capitalize).join → `DemoWidget`. Two cases are HARD errors: a snake
+name whose Rule-B constant collides with the constant of a coexisting
+CamelCase draft (`demo_widget.rb` + `DemoWidget.rb` both → `DemoWidget`),
+and two snake names whose Rule-B constants collide (`a_b` + `a__b` both →
+`AB`). Ratified by the decision artifact
+`reports/entity-case-convention-decision.md`.
+
+The entity base is the `extend Entity` (or `extend
 EntityWorkflow`) line INSIDE the entity file — a hand-authored draft
 carries its own `module` wrapper and its own extend line, because
 `Kernel#load` evaluates the file at top level; `path_validate`
 (`entity` kind) checks exactly this shape: the top-level module must
-match the file name (`demo_widget.rb` → `module DemoWidget`, optional
-leading `::`) and must contain the extend line. An `entity_property`
+match `constant_name` of the file name (`DemoWidget.rb` → `module
+DemoWidget`, and `TF.rb` → `module TF`, optional leading `::` — a legacy
+`demo_widget.rb` must declare `module DemoWidget`, the Rule-B constant)
+and must contain the extend line. An `entity_property`
 draft conversely must NOT carry an extend line (the entity file owns
 the extend) and must declare `property :name => :type do ... end`;
-`path_validate` checks that too. A typeless `property :plain do` is
+`path_validate` checks that too; its entity segment follows the same
+name rules (CamelCase canonical, legacy snake accepted with the warning).
+A typeless `property :plain do` is
 valid and dispatches as `:both`.
 
 The generated form of a complete entity file looks like this (the
@@ -250,11 +268,11 @@ identifiers call is included only when an identifier TSV exists beside
 it under `share/entity/<entity>.identifiers.tsv`):
 
 ```ruby
-# share/entities/sample_entity.rb — the COMPLETE file a draft must be.
-module SampleEntity
+# share/entities/DemoWidget.rb — the COMPLETE file a draft must be.
+module DemoWidget
   extend EntityWorkflow
-  add_identifiers Path.setup(File.expand_path('../../entity/sample_entity.identifiers.tsv', __dir__))
-  annotation :organism, 'Example organism'
+  add_identifiers Path.setup(File.expand_path('../../entity/DemoWidget.identifiers.tsv', __dir__))
+  annotation :organism
 end
 ```
 
@@ -270,8 +288,8 @@ A property draft is the property declaration plus body, wrapped in the
 SAME entity module:
 
 ```ruby
-# share/entity_properties/sample_entity/label.rb
-module SampleEntity
+# share/entity_properties/DemoWidget/label.rb
+module DemoWidget
   property :label => :single do |prefix, suffix|
     "#{prefix}#{self}#{suffix}"
   end
@@ -298,9 +316,20 @@ expect; they are complete file bodies, not generator inputs.
   and helper declarations. Example:
 
   ```ruby
-  module SampleEntity
+  module DemoWidget
     extend EntityWorkflow
-    annotation :organism, 'Example organism'
+    annotation :organism
+  end
+  ```
+
+  The acronym case (the `TF` example that motivated the CamelCase
+  switch): a short all-caps type stays all-caps, and the module name is
+  identical to the file name:
+
+  ```ruby
+  # share/entities/TF.rb
+  module TF
+    extend Entity
   end
   ```
 
@@ -458,8 +487,8 @@ operation authorizes against the pinned roots — and are declared per kind:
 | kind | tmp root (drafts, default) | project root (promoted) | virtual path |
 |---|---|---|---|
 | `task` | `share/tasks` | `lib/<workflow>/tasks` | `greet_user` |
-| `entity` | `share/entities` | `lib/<workflow>/entity` | `demo_widget` |
-| `entity_property` | `share/entity_properties` | `lib/<workflow>/entity` | `demo_widget/tag_palette` |
+| `entity` | `share/entities` | `lib/<workflow>/entity` | `DemoWidget` |
+| `entity_property` | `share/entity_properties` | `lib/<workflow>/entity` | `DemoWidget/tag_palette` |
 | `python_task` | `share/python_tasks` | `python/tasks` | `my_task` |
 | `test_file` | `share/test` | `test/<workflow>` (plus the `python` location `python/test`) | `task/greet_user` |
 | `probe` | `share/probes` | (none — one-root kind, promote-less) | `motivating_outside_grant` |
@@ -467,10 +496,12 @@ operation authorizes against the pinned roots — and are declared per kind:
 Concrete physical locations for the example names: a task draft lives at
 `share/tasks/greet_user.rb` and, after promotion, at
 `lib/<workflow>/tasks/greet_user.rb`; an entity draft at
-`share/entities/demo_widget.rb` and, after promotion, at
-`lib/<workflow>/entity/demo_widget.rb`; a property draft at
-`share/entity_properties/demo_widget/tag_palette.rb` and, after promotion,
-at `lib/<workflow>/entity/demo_widget/tag_palette.rb`; a Python task draft
+`share/entities/DemoWidget.rb` and, after promotion, at
+`lib/<workflow>/entity/DemoWidget.rb` (a legacy snake draft keeps its
+spelling on both sides, e.g. `share/entities/demo_widget.rb`); a property
+draft at
+`share/entity_properties/DemoWidget/tag_palette.rb` and, after promotion,
+at `lib/<workflow>/entity/DemoWidget/tag_palette.rb`; a Python task draft
 at `share/python_tasks/my_task.py` and, after promotion, at
 `python/tasks/my_task.py`. Path Engine virtual
 paths omit the physical root and the file suffix (`.rb` for the Ruby
@@ -543,16 +574,26 @@ executes the target. Checks per kind:
   `task :name => :type do ... end` declaration. In the `tmp` location
   only, a missing `desc` is a warning, not an error (drafts carry their
   docs in a desc; promoted tasks move it to this README).
-- `entity` — the source must parse, the top-level module must match the
-  file name (`demo_widget.rb` → `module DemoWidget`, with an optional
-  leading `::` — `module ::Gene` is accepted and names the bare
-  constant), and the module must
+- `entity` — the source must parse, the top-level module must match
+  `constant_name` of the file name: a CamelCase name must declare the
+  identical module (`DemoWidget.rb` → `module DemoWidget`, `TF.rb` →
+  `module TF`, with an optional leading `::`), and a legacy snake name
+  must declare the Rule-B constant (`demo_widget.rb` → `module
+  DemoWidget`). The module must
   contain an `extend Entity` or `extend EntityWorkflow` line. Declaring a
-  second top-level module is a warning.
-- `entity_property` — the virtual path must be `<entity>/<property>`
+  second top-level module is a warning. Name-case errors follow the
+  convention above: underscore CamelCase (`Demo_Widget.rb`) and other
+  non-conforming names are hard errors; a legacy snake name is accepted
+  with the warning naming both spellings; a constant collision with a
+  sibling draft is a hard error.
+- `entity_property` — the virtual path must be `<Type>/<property>`
   without a `.rb` suffix (a flat path is an error), the physical source must
   parse, the top-level module
-  must match the entity segment of the path, the file must NOT carry an
+  must match `constant_name` of the entity segment of the path
+  (`DemoWidget/tag_palette.rb` → `module DemoWidget`; the legacy
+  `demo_widget/tag_palette.rb` → `module DemoWidget` by Rule B), the
+  entity segment follows the same name-case rules as the `entity` kind,
+  the file must NOT carry an
   `extend` line (the entity file owns the extend), and it must declare
   `property :name => :type do ... end`; a declared property name that
   differs from the path's property segment is a warning. A typeless
@@ -599,11 +640,16 @@ The advisory pairing map is:
 | kind | tmp paired test | project paired test |
 |---|---|---|
 | `task` | `share/test/task/<name>.rb` | `test/<workflow>/tasks/test_<name>.rb` |
-| `entity` | `share/test/entity/<name>.rb` | `test/<workflow>/entity/test_<name>.rb` |
-| `entity_property` | `share/test/entity_property/<entity>/<entity>.<property>.rb` | `test/<workflow>/entity/<entity>/test_<property>.rb` |
+| `entity` | `share/test/entity/<Type>.rb` | `test/<workflow>/entity/test_<Type>.rb` |
+| `entity_property` | `share/test/entity_property/<Type>/<Type>.<property>.rb` | `test/<workflow>/entity/<Type>/test_<property>.rb` |
 | `helper` | `share/test/helper/<name>.rb` | `test/<workflow>/helpers/test_<name>.rb` |
 | `integration` | `share/test/integration/<name>.rb` | `test/<workflow>/integration/test_<name>.rb` |
 | `python_task` | (no tmp-side pair: the tier lives at the `python` location only) | `python/test/test_<name>.py` |
+
+`<Type>` is the entity-type name in its OWN spelling — CamelCase
+canonical (`DemoWidget`, `TF`), legacy snake keeps its snake spelling
+(`demo_widget`); the map is parsing-free (virtual path == file
+basename), so both spellings resolve identically.
 
 **Spelling rule (stated once).** The share side carries no `test_`
 prefix and keeps the tier spelling (`share/test/task/greet_user.rb`,
@@ -611,14 +657,16 @@ prefix and keeps the tier spelling (`share/test/task/greet_user.rb`,
 prefix to the FINAL FILENAME only, carries intermediate directories
 through unchanged, and renames exactly one tier directory (`task` →
 `tasks`). Concrete examples: `task/greet_user` →
-`test/<workflow>/tasks/test_greet_user.rb`; `entity/demo` →
-`test/<workflow>/entity/test_demo.rb`; `entity_property/demo_widget/tag_palette`
-→ `test/<workflow>/entity/demo_widget/test_tag_palette.rb` (HIERARCHICAL,
+`test/<workflow>/tasks/test_greet_user.rb`; `entity/DemoWidget` →
+`test/<workflow>/entity/test_DemoWidget.rb` (legacy `entity/demo_widget`
+→ `test/<workflow>/entity/test_demo_widget.rb`, own spelling);
+`entity_property/DemoWidget/tag_palette`
+→ `test/<workflow>/entity/DemoWidget/test_tag_palette.rb` (HIERARCHICAL,
 the round-10 layout; the flattened `test_<entity>_<property>.rb`
 spelling is gone: underscore-bearing names made it non-invertible);
 note the TMP side of `entity_property` keeps its own
-`<entity>/<entity>.<property>.rb` spelling, which differs from the
-source-kind virtual path `<entity>/<property>`;
+`<Type>/<Type>.<property>.rb` spelling, which differs from the
+source-kind virtual path `<Type>/<property>`;
 `integration/rt` → `test/<workflow>/integration/test_rt.rb`. The tier
 list is open on the tmp side: any first segment other than
 `entity_property` resolves under a same-named directory below
@@ -630,15 +678,14 @@ the recognized ones.
 **Convention status.** The project-side
 task/entity/entity_property spellings are implemented and pinned by the
 regression suite (`test/<workflow>/test_path_kinds.rb` and
-`test/<workflow>/test_path_kinds_roundtrip.rb`) but have no
-precedent elsewhere in the checkout: they are the convention this README
-records, still awaiting explicit ratification — flagged here rather than
-asserted as settled policy. The `helper` project-side spelling
-`test/<workflow>/helpers/test_<name>.rb` is likewise unratified: it was
-derived by symmetry with the ratified `share/test/helper/` draft side and
-has no precedent in the checkout. `integration` is round 9's own
-convention on both sides, with the same uniform `test_` prefix as every
-other tier.
+`test/<workflow>/test_path_kinds_roundtrip.rb`). The entity-tier
+`<Type>` spellings (CamelCase canonical, legacy snake own-spelling) and
+the parsing-free map (D2) are RATIFIED by the decision artifact
+`reports/entity-case-convention-decision.md`. The `helper` project-side
+spelling `test/<workflow>/helpers/test_<name>.rb` remains unratified: it
+was derived by symmetry with the `share/test/helper/` draft side and has
+no precedent in the checkout. `integration` is round 9's own convention
+on both sides, with the same uniform `test_` prefix as every other tier.
 
 `path_smoke` never runs a Scout job or inference. It exists on the four
 SOURCE kinds only (`task`, `entity`, `entity_property`, `python_task`)
@@ -734,14 +781,16 @@ status) with the file still on disk, so a probe can be fixed and rerun.
 With `path` only, the existing saved probe is re-executed unchanged and
 the run reports the same execution fields plus `executed`.
 
-**Outcome-C deviation, stated plainly.** The original round-12 ask was
+**No-autorun contract (settled, round 13).** The original round-12 ask was
 auto-run: writing or editing a probe through the GENERIC path tools
 would execute it. The engine contract (outcome C; DC-1/DC-2,
 `tmp/notes/round12-engine-contract.md`) makes that impossible without
 fighting the engine: generic `path_write` never consults a kind's
 operation table, and a `path_edit` override is treated as a content
 transform only, whose fixed result shape cannot carry an execution
-report. So the design deliberately does NOT try: the generic operations
+report. So the design deliberately does NOT try — ratified in round 13
+with a behavioral canary (`tmp/path_kinds/round13/no-autorun-evidence.md`)
+and the two pin tests: the generic operations
 `path_write`, `path_edit`, `path_read`, `path_list`, `path_move`,
 `path_rename` and `path_delete` NEVER execute a probe — they are pure
 file operations over the kind root — and create-and-run lives in the
@@ -925,7 +974,7 @@ Choose the runner by what you are trying to establish:
 Test code is ordinary trusted program code. The general test-file lifecycle is:
 
 1. Create or inspect the source resource and use `path_validate`.
-2. Write the paired test through `path_write` on kind `test_file`. Virtual examples are `task/greet_user`, `entity/demo_widget`, `entity_property/demo_widget/tag_palette`, `integration/round_trip`, and `python_task/my_task` (at `location: python`). Do not include the physical `share/test/`, `test/<workflow>/` or `python/test/` roots, or a `.rb`/`.py` suffix, in the virtual path.
+2. Write the paired test through `path_write` on kind `test_file`. Virtual examples are `task/greet_user`, `entity/DemoWidget`, `entity_property/DemoWidget/tag_palette`, `integration/round_trip`, and `python_task/my_task` (at `location: python`). Do not include the physical `share/test/`, `test/<workflow>/` or `python/test/` roots, or a `.rb`/`.py` suffix, in the virtual path.
 3. Run the test with `run_test` at `scope: file`. Widen to `directory` or `suite` only when a broader check is useful. A zero-file discovery is an error, not a passing empty suite.
 4. For source kinds, separately use `path_smoke` when load/registration needs verification. A passing smoke check does not prove behavior.
 5. If the source and test should be permanent, promote each resource separately with `path_promote`. The engine moves one resource per operation; it does not move its paired test for you.
@@ -1047,82 +1096,6 @@ Inputs: `workflow` and `task`. Reports static dependency declarations
 separately from dynamic dependency blocks. A dynamic block's presence does
 not enumerate the complete dependency list; the output explicitly marks the
 list as incomplete when applicable.
-
-## define_python_task
-Create a Python-backed Scout task source file (SUPERSEDED — prefer the `python_task` path kind)
-
-Inputs: `task_name`, `python_source`, and optional `workflow` (default
-`ScoutCoder`). The name must match `[a-z][a-z0-9_]*`; submitted Python
-source is written to `python/tasks/<task_name>.py` in the target workflow
-checkout. The tool supplies the framework import envelope—a top-level
-`import scout`—when the source lacks one, placing it after any module
-docstring and `from __future__` imports. No other Python task code is
-synthesized. The file name selects the Python source file; registered
-function names become the Scout task names and need not be the file name.
-
-### Framework-provided setup vs. user-authored task code
-
-The only authoring boilerplate this tool supplies is the top-level
-`import scout`. That import makes the framework API available; it does not
-declare a task. Authors must still write each Python function header/signature and action
-body, and call `scout.task(function)` to explicitly register the function. For example,
-include `scout.task(greet)` after defining `greet`; a function definition by
-itself is not registered. In this Python task API, inputs are described by the
-authored function signature; `define_python_task` does not infer or generate
-functions, signatures, registrations, dependencies, or task declarations.
-This boundary is intentional.
-
-Minimal complete registration shape (author the function and registration;
-the generator supplies `import scout` only if it is missing):
-
-```python
-import scout
-
-def greet(name: str = "World") -> str:
-    return f"Hello, {name}!"
-
-scout.task(greet)
-```
-
-When `import scout` is omitted from submitted source, the generator inserts it;
-the remainder of this example is still authored by the caller. This complete
-function-and-registration format matches Scout-rig's
-[Python task authoring guide](../scout-rig/user/DefiningPythonTasks.md).
-The task rejects empty or syntactically invalid Python, files that do not
-register task metadata, and any existing target (including a symlink). It
-uses the configured `PYTHON` executable or `python3` and the local
-`~/git/scout-rig/python` package to inspect `--scout-metadata`, then reloads
-the workflow and checks each discovered function name is registered. When
-the import was missing, the saved file includes that framework-supplied
-import and the result reports `framework_import_added: true`; otherwise the
-submitted source remains unchanged and the flag is false. If metadata
-inspection or reload fails after creation, the candidate remains on disk for
-inspection; the error identifies that state. This executes trusted Python
-source during metadata inspection.
-
-**Superseded by the `python_task` path kind** (round 11), which manages
-the same files with the generic `path_*` operations plus validate, smoke
-and promote: use `path_write kind=python_task path=<name>` to author a
-draft under `share/python_tasks/`, `path_validate` for the static checks,
-and `path_promote` to land it in `python/tasks/`. This task remains
-functional; its removal is the user's decision.
-
-## author_python_task_test
-Create a Python unit test for an existing Python task file (SUPERSEDED — prefer `path_write kind=test_file` at the `python` location)
-
-Inputs: `task_name` and `test_source`. Requires
-`python/tasks/<task_name>.py`; writes complete Python source unchanged to
-`python/test/test_<task_name>.py`. The test source must be non-empty and pass
-Python AST syntax validation (using `PYTHON` or `python3`). Existing targets,
-including symlinks, are never overwritten. The source is not executed or
-otherwise checked as a `unittest` test; this tool does not add Python test
-discovery or execution behavior.
-
-**Superseded by the `test_file` kind's `python` location** (round 11):
-`path_write kind=test_file path=python_task/<name> location=python`
-writes the same `python/test/test_<name>.py` file as a managed resource,
-and `run_test` executes it (previously nothing ran these files). This
-task remains functional; its removal is the user's decision.
 
 ## run_test
 Run test files through the `test_file` path kind

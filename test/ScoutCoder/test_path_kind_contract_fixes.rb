@@ -186,14 +186,20 @@ class TestPathKindContractFixes < Test::Unit::TestCase
     assert_include d, 'Paired-test tiers'
     assert_include d, 'share/test/task/<name>.rb'
     assert_include d, 'test/ScoutCoder/tasks/test_<name>.rb'
-    assert_include d, 'share/test/entity/<name>.rb'
-    assert_include d, 'test/ScoutCoder/entity/test_<name>.rb'
-    assert_include d, 'share/test/entity_property/<entity>/<entity>.<property>.rb'
-    assert_include d, 'test/ScoutCoder/entity/<entity>/test_<property>.rb'
+    # CamelCase convention (decision artifact): the entity tier is spelled
+    # <Type> (own spelling — CamelCase canonical, legacy snake keeps its
+    # snake), and the pairing map stays parsing-free (D2).
+    assert_include d, 'share/test/entity/<Type>.rb'
+    assert_include d, 'test/ScoutCoder/entity/test_<Type>.rb'
+    assert_include d, 'share/test/entity_property/<Type>/<Type>.<property>.rb'
+    assert_include d, 'test/ScoutCoder/entity/<Type>/test_<property>.rb'
     assert_include d, 'share/test/integration/<name>.rb'
     assert_include d, 'test/ScoutCoder/integration/test_<name>.rb'
     # The tmp-side asymmetry is called out explicitly.
-    assert_include d, 'NOT <entity>/<property>.rb'
+    assert_include d, 'NOT <Type>/<property>.rb'
+    # The convention note names both spellings.
+    assert_include d, 'CamelCase is canonical'
+    assert_include d, 'legacy snake_case keeps its snake spelling'
   end
 
   def test_pairing_map_sentences_match_the_mapping_authority_spellings

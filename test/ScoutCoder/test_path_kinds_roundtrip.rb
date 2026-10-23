@@ -40,7 +40,10 @@ class TestPathKindsRoundtrip < Test::Unit::TestCase
   LOCATIONS = [TMP_LOCATION, PROJECT_LOCATION].freeze
 
   # The fixture manifest: virtual file-shaped paths per tier. Name classes:
-  # plain, underscore-bearing, dotted, mixed.
+  # plain, underscore-bearing, dotted, mixed, AND (CamelCase convention,
+  # decision artifact reports/entity-case-convention-decision.md) a
+  # CamelCase entity type and its entity_property pairing — the map must
+  # stay injective and parsing-free (D2) with CamelCase entity segments too.
   VIRTUAL_FIXTURES = [
     'task/plain',
     'task/demo_widget',
@@ -49,11 +52,16 @@ class TestPathKindsRoundtrip < Test::Unit::TestCase
     'task/nested/feature_dir_with_underscores/name.x',
     'entity/demo_widget',
     'entity/plain',
+    'entity/DemoWidget',
+    'entity/TF',
+    'entity/TF2',
     'helper/helper_tools',
     'helper/my_helper',
     'entity_property/demo_widget/tag_palette',
     'entity_property/e/p',
     'entity_property/demo_widget/widget',
+    'entity_property/DemoWidget/tag_palette',
+    'entity_property/TF/palette',
     'integration/rt',
     'integration/feature_dir_with_underscores/rt2',
     'sometier/open_one'
@@ -68,6 +76,9 @@ class TestPathKindsRoundtrip < Test::Unit::TestCase
       'task/nested/feature_dir_with_underscores/name.x.rb',
     'entity/demo_widget' => 'entity/demo_widget.rb',
     'entity/plain' => 'entity/plain.rb',
+    'entity/DemoWidget' => 'entity/DemoWidget.rb',
+    'entity/TF' => 'entity/TF.rb',
+    'entity/TF2' => 'entity/TF2.rb',
     'helper/helper_tools' => 'helper/helper_tools.rb',
     'helper/my_helper' => 'helper/my_helper.rb',
     'entity_property/demo_widget/tag_palette' =>
@@ -75,6 +86,9 @@ class TestPathKindsRoundtrip < Test::Unit::TestCase
     'entity_property/e/p' => 'entity_property/e/e.p.rb',
     'entity_property/demo_widget/widget' =>
       'entity_property/demo_widget/demo_widget.widget.rb',
+    'entity_property/DemoWidget/tag_palette' =>
+      'entity_property/DemoWidget/DemoWidget.tag_palette.rb',
+    'entity_property/TF/palette' => 'entity_property/TF/TF.palette.rb',
     'integration/rt' => 'integration/rt.rb',
     'integration/feature_dir_with_underscores/rt2' =>
       'integration/feature_dir_with_underscores/rt2.rb',
@@ -90,6 +104,9 @@ class TestPathKindsRoundtrip < Test::Unit::TestCase
       'tasks/nested/feature_dir_with_underscores/test_name.x.rb',
     'entity/demo_widget' => 'entity/test_demo_widget.rb',
     'entity/plain' => 'entity/test_plain.rb',
+    'entity/DemoWidget' => 'entity/test_DemoWidget.rb',
+    'entity/TF' => 'entity/test_TF.rb',
+    'entity/TF2' => 'entity/test_TF2.rb',
     'helper/helper_tools' => 'helper/test_helper_tools.rb',
     'helper/my_helper' => 'helper/test_my_helper.rb',
     'entity_property/demo_widget/tag_palette' =>
@@ -97,6 +114,9 @@ class TestPathKindsRoundtrip < Test::Unit::TestCase
     'entity_property/e/p' => 'entity/e/test_p.rb',
     'entity_property/demo_widget/widget' =>
       'entity/demo_widget/test_widget.rb',
+    'entity_property/DemoWidget/tag_palette' =>
+      'entity/DemoWidget/test_tag_palette.rb',
+    'entity_property/TF/palette' => 'entity/TF/test_palette.rb',
     'integration/rt' => 'integration/test_rt.rb',
     'integration/feature_dir_with_underscores/rt2' =>
       'integration/feature_dir_with_underscores/test_rt2.rb',

@@ -10,17 +10,20 @@ module ScoutCoder
     #   tmp     -> <checkout>/share/entities                    LiveWorkflow authoring drafts
     #   project -> <checkout>/lib/<workflow>/entity            promoted files (NOT loaded by workflow.rb yet)
     # Virtual path: <entity>.rb ; the file must be a TOP-LEVEL module
-    # `module <CamelCase(file)>` containing `extend Entity` (or
+    # `module <Name>` containing `extend Entity` (or
     # `extend EntityWorkflow`) plus the body — the shape LiveWorkflow's
     # Kernel#load executes (live.rb:33) and the shipped generators emit
     # (entity_tools.rb entity_source). NOT workflow-namespaced.
+    # Entity names are CamelCase (canonical; e.g. DemoWidget); legacy
+    # snake_case names (e.g. demo_widget) are accepted with a warning.
     # -------------------------------------------------------------------
   PATH_KIND_ENTITY_DEFINITION = {
       'description' =>
         "Scout entity module files for #{target_workflow_name} (drafts in share/entities, " \
         "promoted copies in lib/#{target_workflow_name}/entity/<entity>.rb). " \
-        'Virtual paths are relative to the kind root: a bare entity name such as demo_widget, ' \
-        "no .rb suffix and no physical prefix (share/entities/, lib/#{target_workflow_name}/entity/); " \
+        'Virtual paths are relative to the kind root: a bare entity name such as DemoWidget ' \
+        "(CamelCase is canonical; legacy snake_case such as demo_widget is accepted with a " \
+        "warning), no .rb suffix and no physical prefix (share/entities/, lib/#{target_workflow_name}/entity/); " \
         'the file declares a top-level `module <Name>` (`module ::Name` accepted).',
 
       'extension' => 'rb',
@@ -42,7 +45,8 @@ module ScoutCoder
       },
 
       'validate' => lambda do |agent, path, location, args|
-        target = agent.resolve_path('entity', path, location)
+        resolve_kind = args['kind'] || 'entity'
+        target = agent.resolve_path(resolve_kind, path, location)
         errors, warnings = [], []
 
         unless File.file?(target.to_s)
@@ -62,10 +66,18 @@ module ScoutCoder
         if errors.empty?
           # live.rb Kernel#loads this file at TOP LEVEL, so the entity module
           # must be a top-level constant derived from the file name
-          # (entity_tools.rb constant_name: snake_case -> CamelCase).
-          expected = ScoutCoder.path_kind_entity_module_name(File.basename(path.to_s, '.rb'))
+          # (entity_tools.rb constant_name: CamelCase passes through
+          # unchanged; legacy snake_case camelises by Rule B).
+          # Decision artifact reports/entity-case-convention-decision.md:
+          # CamelCase entity names are canonical; legacy snake_case names
+          # are ACCEPTED with a warning (no rename, no hard reject); hard
+          # errors are reserved for constant collisions with sibling drafts.
+          file_name = File.basename(path.to_s, '.rb')
+          expected = ScoutCoder::EntityDefinitionSupport.validate_entity_type_name!(
+            file_name, File.dirname(target.to_s), errors, warnings, 'entity name'
+          )
           declared = ScoutCoder.path_kind_top_level_module(content)
-          unless declared == expected
+          if expected && declared != expected
             errors << "top-level module must be `#{expected}` (from file name); found #{declared ? "`#{declared}`" : 'none'}"
           end
           unless content =~ /^\s*extend\s+(Entity|EntityWorkflow)\s*$/

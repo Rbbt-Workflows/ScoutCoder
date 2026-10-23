@@ -1519,6 +1519,202 @@ class TestPathKinds < Test::Unit::TestCase
     assert @agent.other_options[:tools].key?('run_probe'),
            'the run_probe tool must be installed alongside the path tools'
   end
+
+  # =====================================================================
+  # CamelCase entity-TYPE naming convention (decision artifact
+  # reports/entity-case-convention-decision.md, item 6): the engine-facing
+  # validate matrix for the `entity` and `entity_property` kinds. Runs in
+  # a SANDBOXED kind copy (like every other validate test here) so the
+  # real share/entities/ drafts never influence the collision arms.
+  # =====================================================================
+
+  # CamelCase names — acronym, acronym+digits, multi-word — validate clean
+  # with NO warning, and the declared module matches the path unchanged
+  # (constant_name passes CamelCase through; nothing is camelised).
+  def test_entity_validate_accepts_camelcase_clean
+    confine_kind_root_to_sandbox!
+    kind = sandbox_kind!('entity')
+    write_draft(kind, 'TF', "module ::TF\n  extend Entity\nend\n")
+    r = validate_result(kind, 'TF')
+    assert_equal true, r['ok'], r['reasons'].inspect
+    assert_equal 'TF', r['module']
+    assert_empty r['warnings'], 'canonical CamelCase must validate with NO warning'
+
+    write_draft(kind, 'TF2', "module TF2\n  extend Entity\nend\n")
+    r = validate_result(kind, 'TF2')
+    assert_equal true, r['ok'], r['reasons'].inspect
+    assert_equal 'TF2', r['module']
+    assert_empty r['warnings']
+
+    write_draft(kind, 'DemoWidget', "module ::DemoWidget\n  extend Entity\nend\n")
+    r = validate_result(kind, 'DemoWidget')
+    assert_equal true, r['ok'], r['reasons'].inspect
+    assert_equal 'DemoWidget', r['module']
+    assert_empty r['warnings']
+  end
+
+  # Underscore CamelCase (Demo_Widget) is neither canonical nor legacy —
+  # a hard validate error carrying the new message.
+  def test_entity_validate_hard_rejects_underscore_camelcase
+    confine_kind_root_to_sandbox!
+    kind = sandbox_kind!('entity')
+    write_draft(kind, 'Demo_Widget', "module DemoWidget\n  extend Entity\nend\n")
+    r = validate_result(kind, 'Demo_Widget')
+    assert_equal false, r['ok']
+    assert_match(/invalid entity name "Demo_Widget": expected CamelCase \[A-Z\]\[A-Za-z0-9\]*/,
+                 r['reasons'].join(' '))
+    # The module mismatch must NOT be reported on top: the name was
+    # rejected before a module constant could be expected.
+    refute r['reasons'].any? { |reason| reason.include?('top-level module must be') },
+           'an invalid name must not also demand a module constant'
+  end
+
+  # Legacy snake drafts keep validating WITH the acceptance warning naming
+  # both spellings, the virtual path stays unchanged, and the declared
+  # module is the Rule-B constant.
+  def test_entity_validate_accepts_legacy_snake_with_warning
+    confine_kind_root_to_sandbox!
+    kind = sandbox_kind!('entity')
+    write_draft(kind, 'demo_widget', "module DemoWidget\n  extend Entity\nend\n")
+    r = validate_result(kind, 'demo_widget')
+    assert_equal true, r['ok'], r['reasons'].inspect
+    assert_equal 'DemoWidget', r['module'], 'legacy snake camelises by Rule B for the module rule'
+    assert_equal 1, r['warnings'].length
+    assert_include r['warnings'].first, "legacy snake_case entity name 'demo_widget'"
+    assert_include r['warnings'].first, "module constant 'DemoWidget'"
+
+    # A lowercase single-word name is the legacy branch too (NOT canonical),
+    # so it warns rather than passing silently.
+    write_draft(kind, 'tf', "module Tf\n  extend Entity\nend\n")
+    r = validate_result(kind, 'tf')
+    assert_equal true, r['ok'], r['reasons'].inspect
+    assert_equal 1, r['warnings'].length, 'lowercase name must take the legacy branch, not pass silently'
+
+    # Digit-bearing legacy name: the declared module is the Rule-B constant
+    # (constant_name), which is exactly what the real drafts declare.
+    name = 'workflow_entity_probe_12_727a8b'
+    write_draft(kind, name, "module ::WorkflowEntityProbe12727a8b\n  extend Entity\nend\n")
+    r = validate_result(kind, name)
+    assert_equal true, r['ok'], r['reasons'].inspect
+    assert_equal 'WorkflowEntityProbe12727a8b', r['module']
+    assert_equal 1, r['warnings'].length
+  end
+
+  # A declared module that does not match constant_name of the path is an
+  # error, for BOTH canonical and legacy paths.
+  def test_entity_validate_rejects_module_mismatch_for_both_spellings
+    confine_kind_root_to_sandbox!
+    kind = sandbox_kind!('entity')
+    write_draft(kind, 'DemoWidget', "module ::Gateway\n  extend Entity\nend\n")
+    r = validate_result(kind, 'DemoWidget')
+    assert_equal false, r['ok']
+    assert_match(/top-level module must be `DemoWidget` .* found `Gateway`/, r['reasons'].join(' '))
+
+    write_draft(kind, 'demo_widget', "module ::Gateway\n  extend Entity\nend\n")
+    r = validate_result(kind, 'demo_widget')
+    assert_equal false, r['ok']
+    assert_match(/top-level module must be `DemoWidget` .* found `Gateway`/, r['reasons'].join(' '))
+  end
+
+  # Constant collisions are HARD errors, both directions, both pair kinds:
+  # snake+CamelCase, and two snake names whose Rule-B constants collapse.
+  def test_entity_validate_constant_collisions_are_hard_errors
+    confine_kind_root_to_sandbox!
+    kind = sandbox_kind!('entity')
+    write_draft(kind, 'DemoWidget', "module DemoWidget\n  extend Entity\nend\n")
+    write_draft(kind, 'demo_widget', "module DemoWidget\n  extend Entity\nend\n")
+    r = validate_result(kind, 'demo_widget')
+    assert_equal false, r['ok'], 'snake name colliding with a CamelCase sibling must hard-fail'
+    assert_match(/constant collision: legacy snake_case entity name 'demo_widget' and CamelCase entity name 'DemoWidget' both map to module constant 'DemoWidget'/,
+                 r['reasons'].join(' '))
+    assert_equal 1, r['warnings'].length, 'the legacy acceptance warning still surfaces beside the error'
+
+    r = validate_result(kind, 'DemoWidget')
+    assert_equal false, r['ok'], 'the collision is an error from the CamelCase side too'
+    assert_match(/entity name 'DemoWidget' collides with legacy snake_case entity name 'demo_widget'/,
+                 r['reasons'].join(' '))
+    assert_empty r['warnings']
+
+    # Rule-B collapse between two snake names: a_b and a__b -> AB.
+    write_draft(kind, 'a_b', "module AB\n  extend Entity\nend\n")
+    write_draft(kind, 'a__b', "module AB\n  extend Entity\nend\n")
+    r = validate_result(kind, 'a_b')
+    assert_equal false, r['ok']
+    assert_match(/legacy snake_case entity names 'a_b' and 'a__b' both camelise to module constant 'AB'/,
+                 r['reasons'].join(' '))
+    r = validate_result(kind, 'a__b')
+    assert_equal false, r['ok']
+    assert_match(/both camelise to module constant 'AB'/, r['reasons'].join(' '))
+  end
+
+  # entity_property kind: the ENTITY SEGMENT follows the same rules.
+  def test_entity_property_validate_entity_segment_follows_case_rules
+    confine_kind_root_to_sandbox!
+    kind_e = sandbox_kind!('entity')
+    kind_p = sandbox_kind!('entity_property')
+
+    # CamelCase first segment: canonical, clean.
+    write_draft(kind_p, 'TF/palette', "module TF\n  property :palette => :single do 'x' end\nend\n")
+    r = validate_result(kind_p, 'TF/palette')
+    assert_equal true, r['ok'], r['reasons'].inspect
+    assert_equal 'TF', r['module']
+    assert_empty r['warnings']
+
+    write_draft(kind_p, 'DemoWidget/tag_palette',
+                "module DemoWidget\n  property :tag_palette => :single do 'x' end\nend\n")
+    r = validate_result(kind_p, 'DemoWidget/tag_palette')
+    assert_equal true, r['ok'], r['reasons'].inspect
+    assert_equal 'DemoWidget', r['module']
+    assert_empty r['warnings']
+
+    # Legacy snake first segment: accepted with the warning, module matched
+    # via constant_name of the segment (Rule B).
+    write_draft(kind_p, 'demo_widget/tag_palette',
+                "module DemoWidget\n  property :tag_palette => :single do 'x' end\nend\n")
+    r = validate_result(kind_p, 'demo_widget/tag_palette')
+    assert_equal true, r['ok'], r['reasons'].inspect
+    assert_equal 'DemoWidget', r['module']
+    assert_equal 1, r['warnings'].length
+    assert_include r['warnings'].first, "legacy snake_case entity name 'demo_widget'"
+
+    # Underscore CamelCase first segment is a hard error.
+    write_draft(kind_p, 'Demo_Widget/tag_palette',
+                "module DemoWidget\n  property :tag_palette => :single do 'x' end\nend\n")
+    r = validate_result(kind_p, 'Demo_Widget/tag_palette')
+    assert_equal false, r['ok']
+    assert_match(/invalid entity name "Demo_Widget"/, r['reasons'].join(' '))
+
+    # The collision check also reads the sibling share/entities/ root.
+    write_draft(kind_e, 'DemoWidget', "module DemoWidget\n  extend Entity\nend\n")
+    write_draft(kind_p, 'demo_widget/other_prop',
+                "module DemoWidget\n  property :other_prop do 'x' end\nend\n")
+    r = validate_result(kind_p, 'demo_widget/other_prop')
+    assert_equal false, r['ok'], 'property under a snake entity colliding with the CamelCase sibling must fail'
+    assert_match(/constant collision/, r['reasons'].join(' '))
+  end
+
+  # The REAL checkout drafts (20 files: 18 legacy snake + TF + DemoWidget)
+  # all validate — the convention change never broke the existing drafts.
+  def test_real_checkout_entity_drafts_all_validate
+    %w[TF DemoWidget].each do |camel|
+      r = validate_result('entity', camel)
+      assert_equal true, r['ok'], "#{camel}: #{r['reasons'].inspect}"
+      assert_empty r['warnings'], "#{camel} must carry no warning"
+    end
+    Dir.glob(File.join(ROOT, 'share', 'entities', '*.rb')).sort.each do |file|
+      virtual = File.basename(file, '.rb')
+      camel = virtual =~ /\A[A-Z][A-Za-z0-9]*\z/
+      r = validate_result('entity', virtual)
+      assert_equal true, r['ok'], "#{virtual}: #{r['reasons'].inspect}"
+      warn_count = (r['warnings'] || []).length
+      if camel
+        assert_equal 0, warn_count, "#{virtual} is canonical and must not warn"
+      else
+        assert_equal 1, warn_count, "#{virtual} is legacy and must carry exactly the acceptance warning"
+        assert_include r['warnings'].first, 'legacy snake_case entity name'
+      end
+    end
+  end
 end
 
 # =====================================================================

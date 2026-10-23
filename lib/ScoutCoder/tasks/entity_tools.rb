@@ -1,10 +1,16 @@
 require 'ripper'
 require 'fileutils'
-require 'stringio'
 
 module ScoutCoder
   module EntityDefinitionSupport
-    NAME = /\A[a-z][a-z0-9_]*\z/
+    # Entity-TYPE names are CamelCase (canonical; decision artifact
+    # reports/entity-case-convention-decision.md). Legacy snake_case
+    # names (LEGACY_NAME) are accepted with a warning, never renamed.
+    # Property names stay snake_case (PROPERTY_NAME) — properties are
+    # methods, entity types are Ruby constants.
+    NAME = /\A[A-Z][A-Za-z0-9]*\z/
+    LEGACY_NAME = /\A[a-z][a-z0-9_]*\z/
+    PROPERTY_NAME = /\A[a-z][a-z0-9_]*\z/
     BASES = { 'Entity' => 'Entity', 'EntityWorkflow' => 'EntityWorkflow' }.freeze
 
     module_function
@@ -13,14 +19,113 @@ module ScoutCoder
       File.expand_path('../../..', __dir__)
     end
 
-    def validate_name(name, label)
+    # Canonical CamelCase names are accepted. Legacy snake_case names are
+    # ACCEPTED with their spelling unchanged — never renamed, never
+    # hard-rejected; pass a `warnings` array to collect the acceptance
+    # warning (entity_name_warning) for surfacing. Hard errors are
+    # reserved for constant collisions, which require the sibling drafts
+    # and are therefore checked by the entity path-kind validator.
+    def validate_name(name, label, warnings: nil)
       value = name.to_s
-      raise ArgumentError, "invalid #{label} #{value.inspect}; expected [a-z][a-z0-9_]*" unless NAME.match?(value)
+      case name_case(value)
+      when :legacy
+        warnings << entity_name_warning(value) if warnings
+      when :invalid
+        raise ArgumentError,
+              "invalid #{label} #{value.inspect}; expected CamelCase [A-Z][A-Za-z0-9]* " \
+              '(legacy snake_case [a-z][a-z0-9_]* is accepted with a warning)'
+      end
       value
     end
 
+    # :canonical (CamelCase), :legacy (snake_case, accepted with a
+    # warning) or :invalid — the classification the entity and
+    # entity_property path-kind validators branch on as well.
+    def name_case(name)
+      value = name.to_s
+      return :canonical if NAME.match?(value)
+      return :legacy if LEGACY_NAME.match?(value)
+      :invalid
+    end
+
+    # The acceptance warning for a legacy snake_case entity name: names
+    # BOTH the snake spelling and the CamelCase constant it maps to.
+    # nil for canonical/invalid names.
+    def entity_name_warning(name)
+      return nil unless name_case(name) == :legacy
+      "legacy snake_case entity name '#{name}' accepted with its spelling unchanged; " \
+      "it maps to module constant '#{constant_name(name)}' (canonical spelling is CamelCase)"
+    end
+
+    # Shared entity-TYPE segment validation for the `entity` and
+    # `entity_property` path-kind validators (decision artifact
+    # reports/entity-case-convention-decision.md): CamelCase is canonical,
+    # legacy snake_case is ACCEPTED with a warning (spelling unchanged, no
+    # rename, no hard reject), anything else is an error. Returns the
+    # expected module constant (constant_name), or nil when the name was
+    # rejected. When `sibling_root` names a directory holding sibling
+    # entity definition files, constant collisions become hard errors: a
+    # legacy snake name camelising onto a CamelCase file's constant, and
+    # two snake names camelising onto the same constant (Rule B collapses
+    # underscore runs: a_b/a__b -> AB).
+    def validate_entity_type_name!(name, sibling_root = nil, errors = [], warnings = [], label = 'entity name')
+      value = name.to_s
+      this_case = name_case(value)
+      if this_case == :legacy
+        warnings << entity_name_warning(value)
+      elsif this_case != :canonical
+        errors << "invalid #{label} #{value.inspect}: expected CamelCase [A-Z][A-Za-z0-9]* " \
+                  '(legacy snake_case [a-z][a-z0-9_]* is accepted with a warning)'
+        return nil
+      end
+
+      constant = constant_name(value)
+
+      return constant unless sibling_root && File.directory?(sibling_root)
+
+      Dir.glob(File.join(sibling_root, '*.rb')).sort.each do |other|
+        other_name = File.basename(other, '.rb')
+        next if other_name == value
+        other_constant = constant_name(other_name)
+        next unless other_constant == constant
+        before = errors.length
+        case [this_case, name_case(other_name)]
+        when %i[legacy canonical]
+          errors << "constant collision: legacy snake_case #{label} '#{value}' and CamelCase " \
+                    "#{label} '#{other_name}' both map to module constant '#{constant}'"
+        when %i[canonical legacy]
+          errors << "constant collision: #{label} '#{value}' collides with legacy snake_case " \
+                    "#{label} '#{other_name}' (both map to module constant '#{constant}')"
+        when %i[legacy legacy]
+          errors << "constant collision: legacy snake_case #{label}s '#{value}' and '#{other_name}' " \
+                    "both camelise to module constant '#{constant}' " \
+                    "(split('_').map(&:capitalize).join collapses underscore runs)"
+        end
+        # Keep scanning until a collision is actually recorded: a sibling
+        # with a colliding constant but an UNCLASSIFIABLE name (invalid
+        # case, e.g. 'Demo_Widget') is not one of the two decided
+        # hard-error pairs and must not stop the scan early.
+        break if errors.length > before
+      end
+
+      constant
+    end
+
+    # ScoutCoder: Misc.camel_case must NOT be used for the legacy
+    # snake_case -> constant direction: it splits on digit runs as well as
+    # underscores (scout-essentials misc/format.rb, `split(/_|(\d+)/)`)
+    # and capitalizes the digit segments, so hex/digit-bearing names are
+    # mangled and do not round-trip (workflow_entity_probe_12_727a8b ->
+    # WorkflowEntityProbe12727A8B, matching only 1/18 declared draft
+    # modules), and it collapses underscore boundaries (a_b and a__b both
+    # -> AB). Rule B (split('_').map(&:capitalize).join) matches 18/18
+    # legacy drafts, but still collapses a_b/a__b -> AB (why snake-name
+    # constant collisions are a validation error) and MANGLES CamelCase
+    # input (DemoWidget -> Demowidget, TF -> Tf), so canonical CamelCase
+    # names must pass through UNCHANGED.
     def constant_name(name)
-      name.split('_').map(&:capitalize).join
+      return name.to_s if NAME.match?(name.to_s)
+      name.to_s.split('_').map(&:capitalize).join
     end
 
     def target_file(root, *parts)
@@ -255,8 +360,20 @@ module ScoutCoder
       Entity::MODULES.uniq
     end
 
+    # ScoutCoder: Misc.snake_case is the CamelCase -> snake direction
+    # (keeps acronyms: TF -> TF, HTTPServer -> HTTP_server) but is LOSSY
+    # for digit-bearing names (WorkflowEntityProbe12727a8b ->
+    # workflow_entity_probe12727a8b: digit runs are not re-separated), so
+    # it must never feed a path<->file map — it is only for generating a
+    # snake spelling where one is genuinely needed.
+    # ScoutCoder: Misc.snake_case is the CamelCase -> snake direction
+    # (keeps acronyms: TF -> TF, HTTPServer -> HTTP_server) but is LOSSY
+    # for digit-bearing names (WorkflowEntityProbe12727a8b ->
+    # workflow_entity_probe12727a8b: digit runs are not re-separated), so
+    # it must never feed a path<->file map — it is only for generating a
+    # snake spelling where one is genuinely needed.
     def entity_name_from_constant(constant)
-      constant.to_s.gsub(/([A-Z]+)([A-Z][a-z])/, '\\1_\\2').gsub(/([a-z0-9])([A-Z])/, '\\1_\\2').downcase
+      Misc.snake_case(constant.to_s)
     end
 
     def json_metadata(value)
@@ -314,112 +431,4 @@ module ScoutCoder
         annotations: annotations, formats: formats, identifier_files: identifier_files, properties: properties }
     end
   end
-
-  input :entity_name, :string, 'Entity identifier (lowercase letters, digits and underscores; starts with a letter)', nil, required: true
-  input :definition, :text, 'Trusted Ruby source for the entity body (annotations, helpers, and other declarations; do not include the module or extend line)', nil, required: true
-  input :base, :string, 'Entity base: Entity (default) or EntityWorkflow', 'Entity'
-  input :identifiers, :text, 'Optional TSV file contents; written to share/entity/<entity>.identifiers.tsv and registered at load time', nil
-  input :workflow, :string, 'Workflow whose share/entities directory receives the entity', 'ScoutCoder'
-  # Not exported (see #export_exec below): define_entity / define_entity_property
-  # are callable as ScoutCoder.job(:define_entity, ...) but never exposed as agent
-  # tools; their README entries were removed in round 12. The agent-facing
-  # authoring surface is the entity / entity_property path kinds; the
-  # EntityDefinitionSupport module (defined earlier in this file) stays live for
-  # list_entities.
-  task :define_entity => :json do |entity_name, definition, base, identifiers, workflow|
-    begin
-      name = EntityDefinitionSupport.validate_name(entity_name, 'entity name')
-      raise ArgumentError, 'definition must be non-empty Ruby source' unless definition.is_a?(String) && !definition.strip.empty?
-      selected_base = EntityDefinitionSupport::BASES[base.to_s]
-      raise ArgumentError, "base must be one of #{EntityDefinitionSupport::BASES.keys.join(', ')}" unless selected_base
-      raise ArgumentError, 'definition body must not extend Entity or EntityWorkflow; select the base with the base input' if EntityDefinitionSupport.entity_extension?(definition)
-      target_workflow = managed_workflow(workflow)
-      root = EntityDefinitionSupport.workflow_root(target_workflow)
-      workflow_name = target_workflow.to_s
-      constant = EntityDefinitionSupport.constant_name(name)
-      if Object.const_defined?(constant, false)
-        existing = Object.const_get(constant, false)
-        unless defined?(Entity) && Entity === existing && existing.respond_to?(:properties)
-          raise ArgumentError, "constant ::#{constant} is already defined and is not an Entity; refusing to redefine it"
-        end
-        # Existing top-level entities are augmented by adding share/entity_properties files.
-      end
-      entity_path = EntityDefinitionSupport.target_file(root, "#{name}.rb")
-      identifiers_path = identifiers.nil? ? nil : EntityDefinitionSupport.identifier_file(root, name)
-      raise ArgumentError, 'identifiers must be non-empty TSV text when supplied' if identifiers_path && (!identifiers.is_a?(String) || identifiers.empty?)
-      EntityDefinitionSupport.no_existing_file!(entity_path, 'entity definition')
-      EntityDefinitionSupport.no_existing_file!(identifiers_path, 'identifier TSV') if identifiers_path
-      source = EntityDefinitionSupport.entity_source(name, selected_base, definition, identifiers: !identifiers_path.nil?)
-      EntityDefinitionSupport.compile!(source, entity_path, 'entity definition')
-      if identifiers_path
-        begin
-          TSV.parse_header(StringIO.new(identifiers))
-        rescue StandardError => error
-          raise ArgumentError, "invalid identifier TSV header: #{error.message}"
-        end
-        EntityDefinitionSupport.write_exclusive(identifiers_path, identifiers, 'identifier TSV')
-      end
-      begin
-        EntityDefinitionSupport.write_exclusive(entity_path, source, 'entity definition')
-      rescue StandardError
-        File.delete(identifiers_path) if identifiers_path && File.file?(identifiers_path)
-        raise
-      end
-      EntityDefinitionSupport.reload!(entity_path, 'define_entity', root)
-      entity = EntityDefinitionSupport.scoutcoder_entity(name, root)
-      unless Object.const_defined?(constant, false) && Object.const_get(constant, false).equal?(entity)
-        raise ArgumentError, "entity registration failed: ::#{constant} is not defined at top level"
-      end
-      { entity: name, constant: "::#{constant}", workflow: workflow_name, base: selected_base, path: entity_path, identifiers_path: identifiers_path,
-        bytes: source.bytesize, validation: { entity_name: 'passed', source: 'passed', base: 'passed', syntax: 'passed', load: 'passed', registration: 'passed' },
-        written: true, overwritten: false }
-    rescue ArgumentError => error
-      raise ParameterException, "define_entity validation/authoring failed: #{error.message}"
-    end
-  end
-  #export_exec :define_entity
-
-  input :entity_name, :string, 'Existing ScoutCoder entity identifier', nil, required: true
-  input :property_name, :string, 'Property identifier (lowercase letters, digits and underscores; starts with a letter)', nil, required: true
-  input :definition, :text, 'Trusted Ruby source containing property :<property_name> declaration', nil, required: true
-  input :workflow, :string, 'Workflow whose share/entity_properties directory receives the property', 'ScoutCoder'
-  task :define_entity_property => :json do |entity_name, property_name, definition, workflow|
-    begin
-      name = EntityDefinitionSupport.validate_name(entity_name, 'entity name')
-      property = EntityDefinitionSupport.validate_name(property_name, 'property name')
-      raise ArgumentError, 'definition must be non-empty Ruby source' unless definition.is_a?(String) && !definition.strip.empty?
-      raise ArgumentError, "definition must contain a property :#{property} declaration (not only a comment or string)" unless EntityDefinitionSupport.property_declaration?(definition, property)
-      target_workflow = managed_workflow(workflow)
-      root = EntityDefinitionSupport.workflow_root(target_workflow)
-      constant = EntityDefinitionSupport.constant_name(name)
-      unless Object.const_defined?(constant, false)
-        target_workflow = managed_workflow(workflow)
-        EntityDefinitionSupport.reload!(File.join(EntityDefinitionSupport.workflow_root(target_workflow), 'workflow.rb'), 'define_entity_property', EntityDefinitionSupport.workflow_root(target_workflow))
-      end
-      raise ArgumentError, "entity ::#{constant} is not defined; define or load it before adding a property" unless Object.const_defined?(constant, false)
-      # Properties are attached to the top-level Entity module, while their
-      # source file belongs to the selected workflow's share tree. The entity
-      # may have been originally defined by a different checkout.
-      entity = EntityDefinitionSupport.scoutcoder_entity(name, root)
-      raise ArgumentError, "property :#{property} is already registered on ::#{EntityDefinitionSupport.constant_name(name)}; refusing to redefine it" if (entity.properties || {}).keys.map(&:to_s).include?(property)
-      property_path = EntityDefinitionSupport.property_file(root, name, property)
-      EntityDefinitionSupport.no_existing_file!(property_path, 'entity property definition')
-      source = EntityDefinitionSupport.property_source(name, definition)
-      EntityDefinitionSupport.compile!(source, property_path, 'entity property')
-      EntityDefinitionSupport.write_exclusive(property_path, source, 'entity property definition')
-      EntityDefinitionSupport.reload!(property_path, 'define_entity_property', root)
-      entity = EntityDefinitionSupport.scoutcoder_entity(name, root)
-      raise ArgumentError, "property registration failed: ::#{EntityDefinitionSupport.constant_name(name)}.properties does not include :#{property}" unless (entity.properties || {}).keys.map(&:to_s).include?(property)
-      unless Object.const_defined?(constant, false) && Object.const_get(constant, false).equal?(entity)
-        raise ArgumentError, "property registration failed: ::#{constant} is not defined at top level"
-      end
-      { entity: name, property: property, workflow: target_workflow.to_s, path: property_path, bytes: source.bytesize,
-        validation: { entity_name: 'passed', property_name: 'passed', source: 'passed', declaration: 'passed', syntax: 'passed', load: 'passed', registration: 'passed' },
-        written: true, overwritten: false }
-    rescue ArgumentError => error
-      raise ParameterException, "define_entity_property validation/authoring failed: #{error.message}"
-    end
-  end
-  #export_exec :define_entity_property
-
 end

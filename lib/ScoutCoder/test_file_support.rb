@@ -16,7 +16,8 @@
 #
 # TIMEOUTS (guide §6): per-file defaults 120s (file and directory scopes),
 # 300s for suite scope; every call site may override with timeout_seconds.
-# The timeout discipline is the TaskTestSupport one: TERM the process
+# The timeout discipline follows the retired task-test runner convention:
+# TERM the process
 # group, wait up to 10s, KILL it if still alive.
 require 'open3'
 require 'rbconfig'
@@ -394,7 +395,7 @@ module ScoutCoder
       end
 
       # Fresh child process with the repo-conventional loader and the
-      # TaskTestSupport TERM -> KILL timeout discipline. `pgroup: true`
+      # TERM -> KILL timeout discipline. `pgroup: true`
       # makes the child its own process-group leader so the negative-pid
       # signal reaches the whole tree.
       def run_child(file, timeout_seconds:, agent: nil)

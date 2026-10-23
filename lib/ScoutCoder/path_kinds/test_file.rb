@@ -83,10 +83,17 @@ module ScoutCoder
     # destinations anymore — the advisory mapping below documents the
     # convention for agents.)
 
-    # snake_case entity name -> top-level module constant, following the
-    # generators' convention (entity_tools.rb constant_name).
+    # Entity-type name -> top-level module constant. CamelCase entity
+    # names (canonical; decision artifact
+    # reports/entity-case-convention-decision.md) pass through UNCHANGED;
+    # legacy snake_case names camelise by Rule B, following
+    # EntityDefinitionSupport#constant_name (entity_tools.rb). NOTE:
+    # Misc.camel_case must never be used here — it splits on digit runs
+    # and mangles hex/digit-bearing names (probe evidence in the decision
+    # artifact: Rule B matches 18/18 legacy draft modules, Misc.camel_case
+    # 1/18).
     def path_kind_entity_module_name(entity)
-      entity.to_s.split('_').collect(&:capitalize).join
+      ScoutCoder::EntityDefinitionSupport.constant_name(entity)
     end
 
     # Top-level module names declared by a piece of Ruby source, in order.
@@ -167,7 +174,8 @@ module ScoutCoder
     # Round 11 (python tier): the `python_task` tier lives ONLY at the
     # 'python' location and maps DIRECTLY under that root as
     # test_<name>.py — the legacy scout-rig convention
-    # (author_python_task_test writes python/test/test_<name>.py). The
+    # (the retired legacy authoring tool wrote python/test/test_<name>.py).
+    # The
     # tier directory is VIRTUAL-ONLY at that location, mirroring how the
     # project side renames task->tasks: one fixed, documented
     # substitution inside this single mapping authority. At the Ruby
@@ -521,10 +529,13 @@ module ScoutCoder
       "integration/round_trip; no .rb suffix, no physical prefix (share/test/, test/#{target_workflow_name}/), " \
       'and "." is a root selector only for enumeration (path_list, run_test suite scope). ' \
       'Paired-test tiers: task -> share/test/task/<name>.rb -> test/' + target_workflow_name + '/tasks/test_<name>.rb; ' \
-      'entity -> share/test/entity/<name>.rb -> test/' + target_workflow_name + '/entity/test_<name>.rb; ' \
-      'entity_property -> share/test/entity_property/<entity>/<entity>.<property>.rb -> ' \
-      'test/' + target_workflow_name + '/entity/<entity>/test_<property>.rb (tmp side is ' \
-      '<entity>/<entity>.<property>.rb, NOT <entity>/<property>.rb); ' \
+      'entity -> share/test/entity/<Type>.rb -> test/' + target_workflow_name + '/entity/test_<Type>.rb ' \
+      '(<Type> is the entity-type name in its OWN spelling — CamelCase is canonical ' \
+      '(DemoWidget), legacy snake_case keeps its snake spelling per the decision artifact; ' \
+      'the map is parsing-free, virtual path == file basename); ' \
+      'entity_property -> share/test/entity_property/<Type>/<Type>.<property>.rb -> ' \
+      'test/' + target_workflow_name + '/entity/<Type>/test_<property>.rb (tmp side is ' \
+      '<Type>/<Type>.<property>.rb, NOT <Type>/<property>.rb); ' \
       'integration -> share/test/integration/<name>.rb -> test/' + target_workflow_name + '/integration/test_<name>.rb.',
     'extension' => 'rb',
     'locations' => ['tmp', 'project', 'python'],
@@ -533,7 +544,7 @@ module ScoutCoder
       'tmp' => Scout.share.test,
       'project' => Scout.root.test[target_workflow_name],
       # Round 11 (python tier): the legacy scout-rig home for Python
-      # tests, python/test/ (author_python_task_test writes
+      # tests, python/test/ (the retired legacy authoring tool wrote
       # test_<name>.py there). Engine authorization is per-location
       # root, so this third root is its own grant; the python_task tier
       # of the virtual grammar maps into it (see the mapping authority).

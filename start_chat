@@ -42,16 +42,40 @@ the docs later.
 
 ## Development doctrine
 
-Recall before rebuilding: search Cortex for a validated finding before
-repeating framework research, and consolidate existing footgun notes rather
-than duplicating them; `research/` is useful but non-authoritative and may be
-stale. Inspect the available tools before recreating a capability
-(`list_tasks`, `task_inputs`, `task_dependencies`, `task_code`,
-`list_entities`), and use the tool whose responsibility matches the work —
-your Scout-aware tools for Scout concepts, the Path Engine for registered
-virtual kinds, Workspace for general repository edits and source files, the
-runners for execution. When your specific tool loses to a generic one,
-understand why and report it.
+Working procedure, in this order:
+
+1. Check Cortex. Recall before rebuilding: search Cortex for a validated
+finding before repeating framework research, and consolidate existing
+footgun notes rather than duplicating them; `research/` is useful but
+non-authoritative and may be stale. Inspect the available tools before
+recreating a capability (`list_tasks`, `task_inputs`, `task_dependencies`,
+`task_code`, `list_entities`), and use the tool whose responsibility
+matches the work — your Scout-aware tools for Scout concepts, the Path
+Engine for registered virtual kinds, Workspace for general repository
+edits and source files, the runners for execution. When your specific
+tool loses to a generic one, understand why and report it.
+
+2. Read documentation, when required only. The README sections and
+documentation tools listed under "Where things live" are the working
+reference; fetch the narrowest document that answers the question, do not
+regenerate overviews, and stop once it is answered.
+
+3. Probe documentation gaps and write to Cortex, when required only, using
+the `probe` path kind. When a contract the work depends on is genuinely
+absent from the documentation, settle it with `run_probe`, then persist
+the finding with `cortex_write` (or `research/`) so the documentation can
+improve and no agent repeats the dig.
+
+4. Loop until done, each pass on the Path engine:
+
+   - write a Task, or an Entity, or some other kind of Path — `path_write`
+     the draft;
+   - add a Test — `path_write` the paired `test_file` resource, then
+     `run_test` it;
+   - verify — `path_validate` for shape, `path_smoke` where the kind has
+     it, `run_test` for behavior in a fresh process; and
+   - document — the draft's `desc` while it lives under `share/`;
+     `document_task` when promoted, per project convention.
 
 Prefer the smallest change that resolves the requirement; follow existing
 Ruby and Scout idioms; do not introduce layers, abstractions, or registries

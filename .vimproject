@@ -29,6 +29,10 @@ ScoutCoder=/$PWD filter="*.rb *.rake Rakefile *.rdoc *.R *.sh *.js *.haml *.sass
 
   path_testing
 
+  path_python_task
+
+  path_probe
+
   refactor
 
 

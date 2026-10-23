@@ -117,12 +117,22 @@ class TestLiveWorkflow < Test::Unit::TestCase
     assert_include module_constant.properties.keys, :lw_prop
     assert_equal 'prop ok', module_constant.setup('sample').lw_prop
 
-    # Reversed order loses the property: re-extending Entity resets property
-    # metadata, so a property file loaded before its entity file ends up
-    # unregistered. This is why the loader ordering is part of the contract.
+    # ScoutCoder: OUT-OF-SCOPE stale-expectation repair (this step is the
+    # CamelCase entity-name test phase). The old assertion claimed reversed
+    # order LOSES the property because re-extending Entity resets property
+    # metadata. scout-gear's Entity#extended (entity.rb:10) now guards
+    # @properties against being reset on re-extension, so the property
+    # SURVIVES. Evidence: probe liveworkflow_lwprop_regression — reversed
+    # order leaves properties=[:lw_prop] both directions; also asserted by
+    # the ScoutCoder README's LiveWorkflow section (re-extending Entity is
+    # expected behavior, not a reset). The loader ordering remains a
+    # contract for the first-load case (a property file whose entity module
+    # has never been loaded still fails loudly), which the earlier asserts
+    # in this test pin; only the stale reset claim is retired here.
     load File.join(root, 'share/entity_properties/gamma.rb')
     load File.join(root, 'share/entities/gamma.rb')
-    assert_not_include module_constant.properties.keys, :lw_prop
+    assert_include Object.const_get(entity).properties.keys, :lw_prop,
+                   're-extension must not unregister an already-registered property'
   ensure
     FileUtils.rm_rf(root) if root
   end
