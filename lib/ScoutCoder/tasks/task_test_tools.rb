@@ -1,8 +1,8 @@
 require_relative '../task_test_support'
 
 module ScoutCoder
-  # Promoted tasks: documentation lives in README.md (## author_task_test and
-  # ## run_task_test), not desc.
+  # Unimported task file (workflow.rb require commented out; README entries
+  # removed in round 12). Successor: the test_file path kind + run_test.
   input :task_name, :string, 'Existing ScoutCoder-authored task name'
   input :test_source, :text, 'Ruby test source to create for the task'
   task :author_task_test => :json do |task_name, test_source|

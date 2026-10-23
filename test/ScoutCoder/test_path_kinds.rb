@@ -181,7 +181,8 @@ class TestPathKinds < Test::Unit::TestCase
     'entity' => 'entities',
     'entity_property' => 'entity_properties',
     'python_task' => 'python_tasks',
-    'test_file' => 'test'
+    'test_file' => 'test',
+    'probe' => 'probes'
   }.freeze
 
   def tool(tool_name, args)
@@ -1490,11 +1491,11 @@ class TestPathKinds < Test::Unit::TestCase
     FileUtils.rm_rf(outside) if outside
   end
 
-  # 8.16 README-vs-code lock: the registered kind set is exactly the four
+  # 8.16 README-vs-code lock: the registered kind set is exactly the six
   # kinds the `## Agent path kinds` README section documents, and the
-  # run_test custom operation is installed as the model-facing tool.
+  # run_test / run_probe custom operations are installed as model-facing tools.
   def test_registered_kinds_match_readme_documented_set
-    documented = %w[task entity entity_property python_task test_file].sort
+    documented = %w[task entity entity_property python_task test_file probe].sort
     registered = @agent.path_kind_registry.keys.sort
     assert_equal documented, registered,
                  'PATH_KINDS must match the kinds documented in README ## Agent path kinds'
@@ -1506,6 +1507,17 @@ class TestPathKinds < Test::Unit::TestCase
            'patch must stay off for test_file'
     assert @agent.other_options[:tools].key?('run_test'),
            'the run_test tool must be installed alongside the path tools'
+
+    # Round 12: the probe kind — one root, promote-less, validate + run_probe.
+    pb = ScoutCoder::PATH_KINDS.fetch('probe')
+    assert_equal %w[tmp], pb.fetch('locations'),
+                 'probe is a ONE-location kind (share/probes only)'
+    assert pb.fetch('operations').key?('run_probe'),
+           'probe must register the run_probe custom operation'
+    assert_equal false, pb.fetch('capabilities').fetch('promote', false),
+                 'probe must be promote-less'
+    assert @agent.other_options[:tools].key?('run_probe'),
+           'the run_probe tool must be installed alongside the path tools'
   end
 end
 
@@ -1608,5 +1620,224 @@ class TestPathKindsPythonTestTier < TestPathKinds
     assert_equal 'R11-PYT-CANARY', File.read(canary), 'outside canary untouched'
   ensure
     FileUtils.rm_rf(outside) if outside
+  end
+end
+
+# =====================================================================
+# Round 12 — the `probe` path kind (unsandboxed ScoutCoder-only snippets)
+# =====================================================================
+# Contract under test (lib/ScoutCoder/path_kinds/probe.rb +
+# lib/ScoutCoder/probe_support.rb + lib/ScoutCoder/tasks/probe_tools.rb):
+#
+#   * ONE location root share/probes/ ('tmp'), NO promote, NO smoke,
+#     NO patch, validate (syntax-only, NEVER executes) plus ONE custom
+#     operation run_probe (:full handler, authorization: :read).
+#   * The run_probe operation, when `source` is supplied, owns the
+#     write: save first (never reverted on failure), AST syntax-check,
+#     then execute — reporting saved/syntax/execution as INDEPENDENT
+#     outcomes.
+#   * The child is a FRESH UNSANDBOXED Ruby process that preloads the
+#     owning checkout's workflow.rb before loading the probe
+#     (PATH_KIND_PROJECT_ROOT seam preserved).
+#   * Failures are normalized: ParameterException or the structured
+#     envelope, never a raw non-Scout exception.
+#
+# The motivating case (a probe reading a file OUTSIDE every Workspace
+# sandbox grant in a fresh unsandboxed child) is pinned in
+# share/test/integration/round12_outside_grant.rb — it needs the REAL
+# engine checkout tree, so it cannot run inside the suite's sandbox
+# harness here.
+class TestPathKindsProbe < TestPathKinds
+  PROBE_TMP_SUBDIR = 'probes'.freeze
+
+  def probe_kind!
+    confine_kind_root_to_sandbox!
+    sandbox_kind!('probe')
+  end
+
+  def probe_run(kind, path, source: nil, timeout: nil)
+    args = {'kind' => kind, 'path' => path}
+    args['source'] = source unless source.nil?
+    args['timeout_seconds'] = timeout unless timeout.nil?
+    raw = tool('run_probe', args)
+    if raw.is_a?(String) && raw.include?('"exception"')
+      begin
+        parsed = JSON.parse(raw)
+        raise ParameterException, parsed['exception'] || parsed.inspect if parsed.key?('exception') && !parsed.key?('ok')
+      rescue JSON::ParserError
+        nil # fall through, return raw
+      end
+    end
+    Hash === raw ? raw : JSON.parse(raw)
+  end
+
+  # canary helper: a probe source whose EXECUTION would write a file.
+  def canary_source(canary, token)
+    "File.write(#{canary.inspect}, #{token.inspect})"
+  end
+
+  # 1. write-with-source executes and reports the independent outcomes.
+  def test_probe_write_with_source_executes_and_reports_independently
+    kind = probe_kind!
+    marker = File.join(@sandbox, 'probe-marker.txt')
+
+    r = probe_run(kind, 'r12_write_run',
+                  source: "puts 'R12-RAN'\nFile.write(#{marker.inspect}, 'x')\n")
+    assert_equal true, r['saved'], 'source must be saved'
+    assert_equal true, r['syntax_ok']
+    assert_equal true, r['executed']
+    assert_equal 'completed', r['execution']['exit_class']
+    assert_match(/R12-RAN/, r['execution']['stdout'])
+    assert File.exist?(marker), 'the probe body must have EXECUTED'
+    assert File.file?(File.join(@sandbox, 'share', 'probes', 'r12_write_run.rb'))
+  end
+
+  # 2. runtime failure leaves the source saved and reports stderr/exception.
+  def test_probe_runtime_failure_keeps_source_and_reports_exception
+    kind = probe_kind!
+    r = probe_run(kind, 'r12_boom',
+                  source: "# boom probe\nraise 'R12-BOOM'\n")
+    assert_equal true, r['saved'], 'source stays saved after a runtime failure'
+    assert_equal true, r['syntax_ok']
+    assert_equal 'raised', r['execution']['exit_class']
+    refute_equal 0, r['execution']['exit_status']
+    assert_match(/R12-BOOM/, r['execution']['stderr'])
+    assert File.file?(File.join(@sandbox, 'share', 'probes', 'r12_boom.rb')),
+                 'the saved probe file must NOT be reverted or deleted'
+  end
+
+  # 3. syntax failure saves but skips execution.
+  def test_probe_syntax_failure_saves_but_skips_execution
+    kind = probe_kind!
+    canary = File.join(@sandbox, 'probe-syntax-canary.txt')
+
+    r = probe_run(kind, 'r12_bad_syntax',
+                  source: "File.write(#{canary.inspect}, 'x')\nq = 'unterminated\n")
+    assert_equal true, r['saved'], 'a syntax failure still saves the source'
+    assert_equal false, r['syntax_ok']
+    assert_equal false, r['executed']
+    assert_equal 'skipped_syntax_error', r['execution']['exit_class']
+    assert_match(/syntax|unterminated/i, r['syntax_error'].to_s)
+    assert !File.exist?(canary), 'an unparseable body must never execute'
+    assert File.file?(File.join(@sandbox, 'share', 'probes', 'r12_bad_syntax.rb'))
+  end
+
+  # 4. validate NEVER executes — side-effect canary, valid AND invalid
+  #    sources. This is the proof that validate is side-effect free.
+  def test_probe_validate_never_executes_valid_or_invalid
+    kind = probe_kind!
+    canary = File.join(@sandbox, 'probe-validate-canary.txt')
+
+    write_draft(kind, 'r12_canary', canary_source(canary, 'R12-VALIDATE'))
+    r = validate_result(kind, 'r12_canary')
+    assert_equal true, r['ok'], "valid probe must validate clean: #{r['reasons'].inspect}"
+    assert !File.exist?(canary),
+         'validate on a VALID probe must not execute it (canary absent)'
+
+    write_draft(kind, 'r12_canary_bad',
+                "#{canary_source(canary, 'R12-VALIDATE-BAD')}\nq = 'unterminated\n")
+    r2 = validate_result(kind, 'r12_canary_bad')
+    assert_equal false, r2['ok']
+    assert !File.exist?(canary),
+         'validate on an INVALID probe must not execute it (canary absent)'
+  end
+
+  # 5. re-execution of an unedited probe (repeatable observable effect):
+  #    run twice through the run_probe operation, second call WITHOUT
+  #    source, and observe the body twice.
+  def test_probe_rerun_of_unedited_probe_repeats_effect
+    kind = probe_kind!
+    counter = File.join(@sandbox, 'probe-counter.txt')
+
+    first = probe_run(kind, 'r12_repeat',
+                      source: "n = (File.exist?(#{counter.inspect}) ? File.read(#{counter.inspect}).to_i : 0) + 1\nFile.write(#{counter.inspect}, n.to_s)\n")
+    assert_equal 'completed', first['execution']['exit_class']
+
+    second = probe_run(kind, 'r12_repeat') # path only: re-execute saved file
+    assert_equal true, second['executed'], 'path-only run re-executes the existing probe'
+    assert_equal 'completed', second['exit_class']
+    assert_equal '2', File.read(counter),
+                 'running the same probe twice must produce the effect twice'
+  end
+
+  # 6. timeout classification: a sleeping probe is TERMed and reported as
+  #    'timeout' (process-group + TERM/grace/KILL discipline).
+  def test_probe_timeout_classification
+    kind = probe_kind!
+    r = probe_run(kind, 'r12_sleep', source: "sleep 30\n", timeout: 1)
+    assert_equal true, r['executed']
+    assert_equal 'timeout', r['execution']['exit_class']
+    assert r['execution']['duration_seconds'] < 15,
+           "timeout must fire near the deadline (took #{r['execution']['duration_seconds']}s)"
+  end
+
+  # 7. timeout bounds are enforced BEFORE any write (normalize_timeout).
+  #    The tool wrapper converts the hook's ParameterException into a JSON
+  #    String ('exception'); probe_run re-raises it as ParameterException.
+  def test_probe_timeout_bounds_rejected
+    kind = probe_kind!
+    canary = File.join(@sandbox, 'probe-bounds-canary.txt')
+    e = assert_raise(ParameterException) do
+      probe_run(kind, 'r12_bounds', source: canary_source(canary, 'x'), timeout: 0)
+    end
+    assert_match(/between 1 and 3600/, e.message)
+    assert !File.exist?(File.join(@sandbox, 'share', 'probes', 'r12_bounds.rb')),
+         'an out-of-range timeout must reject the call before saving'
+  end
+
+  # 8. the child preloads the owning checkout's workflow.rb — the probe
+  #    can use Scout constants the moment it starts.
+  def test_probe_child_preloads_owning_workflow
+    kind = probe_kind!
+    r = probe_run(kind, 'r12_workflow_probe',
+                  source: "raise 'no ScoutCoder' unless defined?(ScoutCoder)\nputs \"WF=#{ScoutCoder.name}\"\n")
+    assert_equal 'completed', r['execution']['exit_class'], r['execution']['stderr']
+    assert_match(/WF=ScoutCoder/, r['execution']['stdout'])
+    assert_match(/ScoutCoder\z/, r['execution']['workflow_loaded'].to_s)
+  end
+
+  # 9. the generic CRUD surface works and nothing auto-runs: path_write
+  #    (outcome C, DC-1) NEVER executes the saved probe.
+  def test_probe_generic_write_never_auto_runs
+    kind = probe_kind!
+    canary = File.join(@sandbox, 'probe-write-canary.txt')
+    write_draft(kind, 'r12_nowrite', canary_source(canary, 'R12-AUTORUN'))
+    assert File.file?(File.join(@sandbox, 'share', 'probes', 'r12_nowrite.rb'))
+    assert !File.exist?(canary),
+         'path_write must never auto-run the probe (outcome C: write ignores the operation table)'
+  end
+
+  # 10. promote-less: the engine installs no path_promote support for probe.
+  def test_probe_kind_is_promote_less
+    kind = probe_kind!
+    assert_equal false, @agent.path_kind_definition(kind).fetch('capabilities').fetch('promote', false)
+    raw = promote(kind, 'r12_write_run')
+    assert raw.is_a?(String) || raw.is_a?(Hash)
+    assert_match(/does not support promote|does not support operation/, raw.to_s)
+  end
+
+  # 11. nothing auto-loads share/probes: a fresh workflow load (the
+  #     LiveWorkflow loader) never executes probe drafts.
+  def test_nothing_auto_loads_share_probes
+    canary = File.join(@sandbox, 'probes-auto-load-canary.txt')
+    draft = File.join(@sandbox, 'share', 'probes', 'r12_autoload.rb')
+    FileUtils.mkdir_p(File.dirname(draft))
+    File.write(draft, canary_source(canary, 'R12-AUTOLOAD'))
+
+    # A checkout needs a workflow.rb for the loader to require: copy the
+    # real one plus the lib/ tree (LiveWorkflow loads it through the
+    # checkout's own load path), then add the canary draft under
+    # share/probes. Nothing may execute it.
+    FileUtils.cp_r(File.join(ROOT, 'lib'), File.join(@sandbox, 'lib'))
+    FileUtils.cp(File.join(ROOT, 'workflow.rb'), File.join(@sandbox, 'workflow.rb'))
+
+    out, err, status = Open3.capture3(RbConfig.ruby, '-e',
+      '$LOAD_PATH.unshift(File.expand_path("lib", Dir.pwd)); require "./workflow"',
+      chdir: @sandbox)
+    assert status.success?, "sandbox workflow load failed: #{err}"
+    assert !File.exist?(canary),
+         'a workflow load must never execute share/probes drafts (only the four LiveWorkflow subdirs load)'
+  ensure
+    FileUtils.rm_f(canary)
   end
 end

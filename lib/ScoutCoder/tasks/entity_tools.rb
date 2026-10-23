@@ -320,6 +320,12 @@ module ScoutCoder
   input :base, :string, 'Entity base: Entity (default) or EntityWorkflow', 'Entity'
   input :identifiers, :text, 'Optional TSV file contents; written to share/entity/<entity>.identifiers.tsv and registered at load time', nil
   input :workflow, :string, 'Workflow whose share/entities directory receives the entity', 'ScoutCoder'
+  # Not exported (see #export_exec below): define_entity / define_entity_property
+  # are callable as ScoutCoder.job(:define_entity, ...) but never exposed as agent
+  # tools; their README entries were removed in round 12. The agent-facing
+  # authoring surface is the entity / entity_property path kinds; the
+  # EntityDefinitionSupport module (defined earlier in this file) stays live for
+  # list_entities.
   task :define_entity => :json do |entity_name, definition, base, identifiers, workflow|
     begin
       name = EntityDefinitionSupport.validate_name(entity_name, 'entity name')

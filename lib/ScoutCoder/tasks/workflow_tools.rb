@@ -242,7 +242,8 @@ module ScoutCoder
 
   # Create new authored task definitions under share/tasks. Keep this trusted
   # code interface with the tooling, not alongside the files it creates.
-  # Promoted task: documentation lives in README.md (## define_task), not desc.
+  # Commented-out declaration: define_task is not registered. Successor: the
+  # task path kind (path_write kind=task); README entry removed in round 12.
   #input :task_name, :string, 'New task identifier (lowercase letters, digits and underscores; starts with a letter)', nil, required: true
   #input :definition, :text, 'Ruby task DSL source: desc/input declarations and a task declaration matching task_name', nil, required: true
   #input :export_type, :string, 'Optionally export the generated task with export or export_exec (none to omit)', 'export'

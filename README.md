@@ -70,7 +70,7 @@ Open.consume_stream io
 - scout-ai `doc/developer/Sandbox.md` § "Is this tool sandboxed?" — which tools are confined and how the two permission layers relate.
 - scout-ai `doc/developer/PathEngine.md` § "Registering a kind" and "Callback contract and trust boundary" — the engine semantics under [Agent path kinds](#agent-path-kinds).
 - scout-gear `doc/user/WorkingWithEntities.md` § "Format and identifier translation" — entity identifier-file conventions.
-- scout-gear `doc/developer/EntitySystem.md` § "Entity definition" and "Property dispatch" — the entity/property machinery the authoring tools wrap.
+- scout-gear `doc/developer/EntitySystem.md` § "Entity definition" and "Property dispatch" — the entity/property machinery the entity path kinds' validators check against.
 - scout-gear `doc/user/CachingData.md` § "Where persistence lives (ecosystem split)" — where job/Step results actually persist.
 - scout-rig `doc/user/DefiningPythonTasks.md` — the Python task authoring contract behind `define_python_task`.
 - Workspace `doc/user/TSV.md` — TSV task semantics in the Workspace workflow (local doc).
@@ -80,9 +80,9 @@ Open.consume_stream io
 - [Development doctrine and tool selection](#development-doctrine-and-tool-selection) — tool table, layered validation, execution vs file authorization, fresh process vs fresh result, promotion.
 - [Layout conventions](#layout-conventions) and [LiveWorkflow](#liveworkflow) — directory layout and the `share/` draft-loading contract.
 - [Authoring ScoutCoder entities](#authoring-scoutcoder-entities) — entity, property and Python task authoring formats.
-- [Agent path kinds](#agent-path-kinds) — kinds and roots, [kind locations](#kind-locations), [validate](#validate), [test_file run_test](#test_file-run_test), [promote](#promote), [wiring after promotion](#wiring-after-promotion-read-this-before-promoting), [trust boundaries](#trust-boundaries), [when to use which](#when-to-use-which).
+- [Agent path kinds](#agent-path-kinds) — kinds and roots, [kind locations](#kind-locations), [validate](#validate), [test_file run_test](#test_file-run_test), [probe run_probe](#probe-run_probe), [promote](#promote), [wiring after promotion](#wiring-after-promotion-read-this-before-promoting), [trust boundaries](#trust-boundaries), [when to use which](#when-to-use-which).
 - [Testing and execution](#testing-and-execution) — choosing a runner, [authoring and running tests](#authoring-and-running-tests), where job outputs land, [running a task directly](#running-a-task-directly), [documentation during promotion](#documentation-during-promotion).
-- [# Tasks](#tasks) — per-task reference entries: authoring generators, test runners, job inspection, documentation lookup.
+- [# Tasks](#tasks) — per-task reference entries: test runners, probe runner, job inspection, documentation lookup.
 
 ## Development doctrine and tool selection
 
@@ -91,11 +91,12 @@ Use the tool whose responsibility matches the work. ScoutCoder provides Scout-aw
 | Need | Preferred tool | Boundary |
 |---|---|---|
 | Understand existing workflow behavior | `help_workflow`, `list_tasks`, `task_inputs`, `task_dependencies`, `task_code`, `list_entities` | Inspection; no behavior should be inferred from a task name alone |
-| Create a workflow task draft | `define_task` | Writes under `share/tasks/`, reloads the workflow, and verifies registration; the trusted draft may execute while loading |
+| Create a workflow task draft | `path_write` on the `task` kind | Writes under `share/tasks/` at the kind root, with no extension to remember; a workflow reload registers the draft, and the trusted draft may execute while loading |
 | Manage a registered virtual source/test file | `path_kinds`, then `path_read`, `path_write`, `path_edit`, `path_list`, `path_validate`, `path_smoke`, `path_promote` as supported by the kind | Path authorization covers the addressed resource and configured roots |
-| Run a test file | `run_test` for the `test_file` kind; `run_task_test` or `run_helper_test` for their supported conventions | Execution occurs in a fresh process, but `run_test` is deliberately unsandboxed |
+| Run a test file | `run_test` for the `test_file` kind | Execution occurs in a fresh process, but `run_test` is deliberately unsandboxed |
+| Run a probe snippet | `run_probe` on the `probe` kind | Fresh UNSANDBOXED child running trusted code with the caller's authority; see [probe run_probe](#probe-run_probe) |
 | Exercise a workflow task directly | `run_task` | Uses ordinary Scout job execution; check cache replay and clean the addressed job when needed |
-| Edit existing source, wiring, tests, or docs | Workspace | The path tools address ONLY the five registered kinds; for any other file — wiring, docs, data, config — use Workspace. Inspect the exact diff and retest; do not assume Workspace and workflow tools share an execution sandbox |
+| Edit existing source, wiring, tests, or docs | Workspace | The path tools address ONLY the six registered kinds; for any other file — wiring, docs, data, config — use Workspace. Inspect the exact diff and retest; do not assume Workspace and workflow tools share an execution sandbox |
 
 ### Validation is layered
 
@@ -136,8 +137,12 @@ Do not commit, push, or merge unless explicitly asked. Report the actual checks 
   entity extend precedes property registration from either source.
 - `lib/ScoutCoder/` - shipped functionality: task definitions under
   `lib/ScoutCoder/tasks/`, the built-in entity tree under
-  `lib/ScoutCoder/entity/`, and the shared test-support modules
-  (`task_test_support.rb`, `helper_test_support.rb`).
+  `lib/ScoutCoder/entity/` (currently empty), the entity-authoring
+  support consumed by `list_entities` (`tasks/entity_tools.rb`), and the
+  shared runner/support modules (`test_file_support.rb`,
+  `probe_support.rb`, `python_task_support.rb`, plus the legacy
+  `task_test_support.rb` / `helper_test_support.rb` used only by the
+  unimported task_test/helper_tools task files).
 - `share/` - the authoring-drafts convention. `share/tasks/`,
   `share/helpers/`, `share/entities/` and `share/entity_properties/` hold
   draft definitions loaded live by Scout-gear's `LiveWorkflow` on every
@@ -146,13 +151,16 @@ Do not commit, push, or merge unless explicitly asked. Report the actual checks 
   ScoutCoder's own four draft directories are currently empty, so extending
   is a no-op here today.
 - `share/test/` - test-file drafts, including the conventional
-  `task/`, `helper/`, `entity/`, `entity_property/` and `integration/`
-  tiers. They are never loaded by `LiveWorkflow`. Use `run_test` for the
-  general `test_file` lifecycle; `run_task_test` and `run_helper_test`
-  remain available for their specialized authoring-task conventions.
-- `share/entity/` - identifier TSVs (`<entity>.identifiers.tsv`) generated by
-  `define_entity`. Data, not code: they are registered by the generated
-  entity definition and never loaded as Ruby.
+  `task/`, `helper/`, `entity/`, `entity_property/`, `python_task/` and
+  `integration/` tiers. They are never loaded by `LiveWorkflow`; the
+  `test_file` path kind and `run_test` own their lifecycle.
+- `share/probes/` - probe snippets (round 12): unsandboxed, one-off Ruby
+  investigations of the Scout framework itself, managed by the `probe`
+  path kind and executed by `run_probe`. Never loaded by `LiveWorkflow`
+  and never executed by any generic path operation.
+- `share/entity/` - identifier TSVs (`<entity>.identifiers.tsv`) written
+  by the entity-authoring flow. Data, not code: they are registered by
+  the generated entity definition and never loaded as Ruby.
 - `test/` - the unit-test tree for the shipped code, following the Scout
   convention `test/ScoutCoder/...` mirroring `lib/ScoutCoder/...`. Built-in
   task tests live at `test/ScoutCoder/tasks/test_<file>.rb`.
@@ -197,10 +205,7 @@ helpers redefine, and re-extending Entity is expected behavior.
 Hand-authored task and helper draft files loaded by `LiveWorkflow` must wrap
 declarations in the target workflow module (`module MyWorkflow ... end`),
 because `Kernel#load` evaluates each file at top level. Entity and property
-drafts follow their distinct module/body formats described below. The
-`define_task` and `define_helper` generators instead add the enclosing module
-to their supplied declarations. `define_entity` and `define_entity_property`
-wrap their respective supplied sources in the entity module.
+drafts follow their distinct module/body formats described below.
 
 Exclusions and tolerance:
 
@@ -217,105 +222,91 @@ Exclusions and tolerance:
 
 ## Authoring ScoutCoder entities
 
-ScoutCoder can create entity modules and their properties in this checkout under
-`share/entities/` and `share/entity_properties/`. Use `define_entity` to create a
-module and `define_entity_property` to add one property at a time. These are
-authoring drafts loaded by Scout-gear's `LiveWorkflow` extension; the shipped
-built-in entity tree is separately located under `lib/<workflow>/entity/`.
+Entity modules and their properties are authored as DRAFTS through the
+`entity` and `entity_property` path kinds: `path_write kind=entity
+path=<name>` writes `share/entities/<name>.rb` and `path_write
+kind=entity_property path=<entity>/<property>` writes
+`share/entity_properties/<entity>/<property>.rb`. Scout-gear's
+`LiveWorkflow` loads entity drafts before property drafts on every
+workflow reload; the shipped built-in entity tree is separately located
+under `lib/<workflow>/entity/` and is not loaded today.
 
-Entity names and property names must match `[a-z][a-z0-9_]*`; an entity name
-such as `sample_entity` maps to the top-level `::SampleEntity` module. The entity
-base defaults to `Entity`; choose `EntityWorkflow` explicitly when the module
-should also expose workflow behavior. The `definition` inputs are trusted Ruby
-source bodies, not complete module files. `define_entity` generates the entity
-module and its `extend Entity` (or `extend EntityWorkflow`) line; it also adds
-identifier registration when the `identifiers` input is supplied. Do not
-include the module, entity constant, or base-extension wrapper in `definition`:
-an `extend Entity` or `extend EntityWorkflow` call there is rejected. Select the
-base with `base`. These generators supply entity scaffolding; a normal entity
-file loaded directly by `LiveWorkflow` must supply its own module and extension
-lines. For `define_entity_property`, supply a matching
-`property :<property_name> => :<dispatch_type> do |args...| ... end` declaration
-and body; the generator wraps that source in the existing entity module. The
-tool requires the matching `property` declaration but does not infer its
-dispatch type, block arguments, or action. `define_entity` writes
-`share/entities/<entity>.rb`; `define_entity_property` writes
-`share/entity_properties/<entity>/<property>.rb`.
+Entity names and property names must match `[a-z][a-z0-9_]*`; an entity
+name such as `sample_entity` maps to the top-level `::SampleEntity`
+module. The entity base is the `extend Entity` (or `extend
+EntityWorkflow`) line INSIDE the entity file — a hand-authored draft
+carries its own `module` wrapper and its own extend line, because
+`Kernel#load` evaluates the file at top level; `path_validate`
+(`entity` kind) checks exactly this shape: the top-level module must
+match the file name (`demo_widget.rb` → `module DemoWidget`, optional
+leading `::`) and must contain the extend line. An `entity_property`
+draft conversely must NOT carry an extend line (the entity file owns
+the extend) and must declare `property :name => :type do ... end`;
+`path_validate` checks that too. A typeless `property :plain do` is
+valid and dispatches as `:both`.
 
-A complete module listing may be useful for understanding the result, but it
-is not valid `definition` input. The conceptual generated form below shows
-what `base: 'EntityWorkflow'` and `identifiers:` request; it is not a standalone
-source template. The entity body is not a full module to paste into `definition`; the
-identifiers call is generated only when TSV content is provided.
+The generated form of a complete entity file looks like this (the
+identifiers call is included only when an identifier TSV exists beside
+it under `share/entity/<entity>.identifiers.tsv`):
 
 ```ruby
-# Illustrative only: the generator uses a qualified module wrapper,
-# and emits add_identifiers only when identifiers are supplied.
+# share/entities/sample_entity.rb — the COMPLETE file a draft must be.
 module SampleEntity
   extend EntityWorkflow
-  add_identifiers Path.setup(File.expand_path('../entity/sample_entity.identifiers.tsv', __dir__))
+  add_identifiers Path.setup(File.expand_path('../../entity/sample_entity.identifiers.tsv', __dir__))
   annotation :organism, 'Example organism'
 end
 ```
 
-For the generated base and identifier setup, pass the body, selected base,
-and TSV contents separately, as shown here. The TSV header fields name its
-identifier formats (e.g. `#ID,Name`); conventions: scout-gear
-`doc/user/WorkingWithEntities.md` § "Format and identifier translation".
+The TSV header fields name its identifier formats (e.g. `#ID,Name`);
+conventions: scout-gear `doc/user/WorkingWithEntities.md` § "Format and
+identifier translation". The `add_identifiers` path is constructed
+relative to the entity definition file, so registration does not depend
+on the process's current working directory. Identifier files are
+resource data, never loaded as Ruby, and a draft should not overwrite
+an existing one casually.
+
+A property draft is the property declaration plus body, wrapped in the
+SAME entity module:
 
 ```ruby
-entity_definition = "annotation :organism, 'Example organism'"
-identifier_tsv = "#ID,Name\nexample,Example\n"
-
-ScoutCoder.job(:define_entity,
-  entity_name: 'sample_entity',
-  definition: entity_definition,
-  base: 'EntityWorkflow',
-  identifiers: identifier_tsv
-).run
-
-property_definition = <<~'RUBY'
+# share/entity_properties/sample_entity/label.rb
+module SampleEntity
   property :label => :single do |prefix, suffix|
     "#{prefix}#{self}#{suffix}"
   end
-RUBY
-
-ScoutCoder.job(:define_entity_property,
-  entity_name: 'sample_entity',
-  property_name: 'label',
-  definition: property_definition
-).run
+end
 ```
 
-`define_entity` writes `share/entities/<entity>.rb`; each call to
-`define_entity_property` writes `share/entity_properties/<entity>/<property>.rb`.
-Scout-gear's `LiveWorkflow` loader loads entity drafts before recursively
-loading property drafts in sorted order (see Layout conventions and
-LiveWorkflow for the combined order). The authoring tasks refuse to overwrite
-existing entity/property files or an already-registered entity/property. They check
-names, Ruby syntax, and the entity/property declaration; they do not prove the
-semantics of the Ruby code. Since the supplied source executes during workflow
-loading and reload, treat it as trusted code, not sandboxed input. A reload or
-registration failure can occur after the candidate file has been written; the
-task reports the failure but does not generally roll back that file.
+Scout-gear's `LiveWorkflow` loader loads entity drafts before
+recursively loading property drafts in sorted order (see Layout
+conventions and LiveWorkflow for the combined order). Entity-before-
+property ordering is a loader contract: a property file whose entity
+module has not been loaded fails loudly at load time, never silently.
+`path_validate` checks names, Ruby syntax, and the shape declarations;
+it does not prove the semantics of the Ruby code. Since the source
+executes during workflow loading and reload, treat it as trusted code,
+not sandboxed input.
 
 ### Entity and Python task authoring formats
 
-The authoring tools generate the scaffolding described in the task entries
-below. These examples are generator inputs, not complete files. Hand-authored
-files loaded directly by Scout-gear's `LiveWorkflow` must be wrapped in the
-target workflow module.
+These examples show the file shapes the path kinds and validators
+expect; they are complete file bodies, not generator inputs.
 
-- For `define_entity`, supply only the entity body (for example annotations
-  and helper declarations), not a `module` wrapper or `extend Entity` /
-  `extend EntityWorkflow` line. Select the base through `base`; the generator
-  emits the top-level entity module and base extension. If `identifiers` is
-  supplied, pass TSV text separately; the tool writes
-  `share/entity/<entity>.identifiers.tsv` and generates a relative-path
-  `add_identifiers` call. For `define_entity_property`, supply a matching
-  `property :<property_name> => :<dispatch_type> do |args...| ... end`
-  declaration and executable body. It wraps the complete source in the existing
-  entity module. Example `definition`:
+- An entity draft is a complete module file: `module <Entity>` wrapper,
+  the `extend Entity` / `extend EntityWorkflow` line, then annotations
+  and helper declarations. Example:
+
+  ```ruby
+  module SampleEntity
+    extend EntityWorkflow
+    annotation :organism, 'Example organism'
+  end
+  ```
+
+- A property draft is a `property :<name> => :<dispatch_type> do
+  |args...| ... end` declaration and executable body, wrapped in the
+  existing entity module:
 
   ```ruby
   property :hello => :single do |prefix, suffix|
@@ -323,10 +314,11 @@ target workflow module.
   end
   ```
 
-- For `define_python_task`, author the function definitions and explicit
-  `scout.task(function)` registration; the tool inserts only a missing
-  top-level `import scout` (after a module docstring and `__future__` imports
-  when present). It supplies no function or task declaration. For example:
+- For a Python task draft, author the function definitions and explicit
+  `scout.task(function)` registration; the file needs its own top-level
+  `import scout` (after a module docstring and `__future__` imports
+  when present). It supplies no function or task declaration. For
+  example:
 
   ```python
   import scout
@@ -337,20 +329,17 @@ target workflow module.
   scout.task(greet)
   ```
 
-An optional `identifiers` input to `define_entity` is the TSV text to write at
-`share/entity/<entity>.identifiers.tsv`. It must be non-empty and have a header
-accepted by `TSV.parse_header` naming the identifier formats it maps (for
-example, `#ID,Name`; identifier-file conventions are documented once in
-scout-gear `doc/user/WorkingWithEntities.md` § "Format and identifier
-translation"). The generated
-entity definition registers that path with `add_identifiers` at load time.
-The path is constructed relative to the entity definition file, so
-registration does not depend on the process's current working directory.
-Draft authoring tasks write entity modules under `share/entities/` and
-property source under `share/entity_properties/`; the built-in
-module/property loader for `lib/<workflow>/entity/` is a separate
-convention. Supplying identifier text also refuses to overwrite an
-existing identifier file.
+Identifier TSVs live at `share/entity/<entity>.identifiers.tsv`. One
+must be non-empty and have a header accepted by `TSV.parse_header`
+naming the identifier formats it maps (for example, `#ID,Name`;
+identifier-file conventions are documented once in scout-gear
+`doc/user/WorkingWithEntities.md` § "Format and identifier
+translation"). The entity definition registers that path with
+`add_identifiers` at load time. Draft files live under `share/entities/`
+and `share/entity_properties/`; the built-in module/property loader for
+`lib/<workflow>/entity/` is a separate convention. Do not relocate
+drafts to the built-in tree expecting the LiveWorkflow loader to
+discover them.
 
 Use `list_entities` to inspect every entity module known to the process:
 
@@ -378,23 +367,25 @@ exposes no input for it.
 Built-in entity definitions and property files live under
 `lib/<workflow>/entity/`; today that tree is empty and no loader reads it.
 Identifier TSV files remain under `share/entity/`;
-they are resource data registered by the generated entity definition. The
-`define_entity` and `define_entity_property` authoring tools instead create
-drafts loaded by Scout-gear's `LiveWorkflow` under `share/entities/` and
-`share/entity_properties/`.
+they are resource data registered by the entity definition's
+`add_identifiers` call. Entity and property drafts are created through the
+`entity` / `entity_property` path kinds and loaded live by Scout-gear's
+`LiveWorkflow` under `share/entities/` and `share/entity_properties/`.
 These are separate loading conventions; do not relocate drafts to the built-in
-tree expecting the authoring-task loader to discover them.
+tree expecting the LiveWorkflow loader to discover them.
 
 ## Agent path kinds
 
-ScoutCoder registers five path kinds on the scout-ai agent path engine:
+ScoutCoder registers six path kinds on the scout-ai agent path engine:
 `task` (Scout workflow task files), `entity` (Scout entity module files,
 one file per entity), `entity_property` (entity property files,
 addressed through nested `<entity>/<property>` virtual paths),
-`python_task` (Scout Python task source files, one `.py` per task) and
+`python_task` (Scout Python task source files, one `.py` per task),
 `test_file` (unit and integration test files, addressed through tier
 paths such as `task/greet_user`, `integration/round_trip` or
-`python_task/my_task`). They
+`python_task/my_task`) and `probe` (unsandboxed ScoutCoder-only Ruby
+snippets for investigating the Scout framework itself, addressed as a
+bare name under `share/probes/`). They
 expose the authoring surfaces of the current project's own workflow
 (ScoutCoder's own definitions live in `lib/ScoutCoder/path_kinds.rb`;
 the kinds are defined by the workflow of the current directory) as virtual
@@ -403,8 +394,9 @@ with the generic `path_*` tools: the `path_kinds` listing tool plus one
 tool per operation — `path_read`, `path_write`, `path_edit`, `path_list`,
 `path_move`, `path_rename`, `path_delete`, `path_validate`,
 `path_smoke` and `path_promote` — with no per-kind tool fan-out, plus
-the `test_file`-kind `run_test` custom operation (one extra installed
-tool). ScoutCoder does not register a `test` capability or handler;
+the two custom operations installed as their own tools: the
+`test_file`-kind `run_test` and the `probe`-kind `run_probe`. ScoutCoder
+does not register a `test` capability or handler;
 explicit test execution is provided by `run_test`.
 `path_patch` is not offered for any kind. The kinds travel
 only with the whole-workflow `tool: ScoutCoder` introduction: a task-level
@@ -425,7 +417,7 @@ workflow's `PATH_KINDS` constant, capability normalization, the callback
 contract and the trust boundary — are documented in scout-ai
 `doc/developer/PathEngine.md` § "3. Registering a kind" and "8. Callback
 contract and trust boundary". This section covers what is specific to
-these five kinds.
+these six kinds.
 
 The paths are always relative to the :current path map, which is the process
 working directory (ENV['PWD']). In Scout you should always run inferences from
@@ -447,7 +439,8 @@ scope); it is not a readable path in `path_read`.
 
 ### Kind locations
 
-Each of the four Ruby-file kinds has two locations: `tmp` (default) and
+Each of the five Ruby-file kinds except `probe` has two locations:
+`tmp` (default) and
 `project`. For the four source kinds (`task`, `entity`,
 `entity_property`, `python_task`), `tmp` holds source drafts; only the
 Ruby ones among them are loaded by LiveWorkflow (Python drafts are never
@@ -456,7 +449,9 @@ discovery, see [Wiring after promotion](#wiring-after-promotion-read-this-before
 carry test resources that are never loaded automatically; it has THREE
 locations (`tmp`, `project`, `python`). `path_promote` MOVES one resource from `tmp` to
 `project`, where promoted source files are not loaded automatically (see
-`Wiring after promotion` below). Roots follow the current project — relative
+`Wiring after promotion` below). `probe` has ONE location only
+(`tmp`, the default) and no promote: a probe is never promoted, only run.
+Roots follow the current project — relative
 Scout-path declarations are pinned to it once at registration, and every
 operation authorizes against the pinned roots — and are declared per kind:
 
@@ -467,6 +462,7 @@ operation authorizes against the pinned roots — and are declared per kind:
 | `entity_property` | `share/entity_properties` | `lib/<workflow>/entity` | `demo_widget/tag_palette` |
 | `python_task` | `share/python_tasks` | `python/tasks` | `my_task` |
 | `test_file` | `share/test` | `test/<workflow>` (plus the `python` location `python/test`) | `task/greet_user` |
+| `probe` | `share/probes` | (none — one-root kind, promote-less) | `motivating_outside_grant` |
 
 Concrete physical locations for the example names: a task draft lives at
 `share/tasks/greet_user.rb` and, after promotion, at
@@ -522,16 +518,20 @@ within the test tree.
 
 `path_read`, `path_write`, `path_edit`, `path_list`, `path_move`,
 `path_rename` and `path_delete` behave as an exact filesystem view over
-the kind's roots. `patch` is off for all five kinds (whole-file authored
+the kind's roots. `patch` is off for all six kinds (whole-file authored
 sources), and no kind registers a `test` capability.
 
-Capabilities are NOT identical across the five kinds: the four SOURCE
+Capabilities are NOT identical across the six kinds: the four SOURCE
 kinds (`task`, `entity`, `entity_property`, `python_task`) offer
-validate + smoke + promote, while `test_file` offers validate + promote
-and **no smoke** (round-10 decision). For `test_file`, `validate` is the static check and
+validate + smoke + promote; `test_file` offers validate + promote
+and **no smoke** (round-10 decision); `probe` offers validate (syntax
+only) and a single custom operation, `run` — no smoke, no promote, no
+second location. For `test_file`, `validate` is the static check and
 `run_test` is the executing check — `run_test` reports `passed` and the
 exit status separately, so the old "ran OK even if the tests failed"
-smoke verdict was redundant and was removed.
+smoke verdict was redundant and was removed. For `probe`, `validate` is
+a pure AST parse that never executes the file; `run_probe` is the only
+executing surface.
 
 ### validate
 
@@ -578,6 +578,11 @@ executes the target. Checks per kind:
   code). A missing module docstring is a WARNING at both locations
   (convention: Python tasks carry their docs in a module docstring;
   promoted files may move it to README.md per project convention).
+- `probe` — syntax ONLY: the name must match `[a-z][a-z0-9_]*` and the
+  source must pass a Ruby AST parse. Nothing else is checked, and the
+  file is NEVER executed by `path_validate` — no side effects from
+  validate, period (a probe can write files, so validating one must not
+  run it). Execution happens exclusively through `run_probe`.
 
 Test files are ordinary `test_file` resources authored with `path_write`;
 execute them explicitly through the kind's `run_test` custom operation
@@ -705,6 +710,67 @@ classification (`clean_pass`, `assertion_failure`, `load_error`,
 workflow-level [`run_test` task](#run_test) wraps the same runner for
 programmatic use.
 
+### probe run_probe
+
+The `probe` kind carries one custom operation, `run`, exposed to the
+model as its own `run_probe` tool (the
+workflow-level [`run_probe` task](#run_probe) wraps the same runner).
+Inputs: `path` (the bare probe name, no `.rb` suffix, no
+`share/probes/` prefix — single-probe scope only, no directory or suite
+scope), optional `source` and optional `timeout_seconds` (integer
+1..3600; default 120).
+
+**Create-and-run semantics of `source`.** When `source` is given the
+call does THREE things in one tool call: writes/overwrites the probe
+file at `share/probes/<name>.rb`, syntax-checks the saved source with an
+AST-only parse, and — only when the parse succeeds — executes it in the
+fresh child. The result reports the three stages as INDEPENDENT
+outcomes: `saved` (true/false plus the physical target), `syntax_ok`
+(with `syntax_error` text when false) and the `execution` block. A
+syntax failure means saved-but-not-executed; a runtime failure NEVER
+reverts or deletes the saved source — the failure is reported
+(`exit_class=raised`, the exception class and message, stderr, exit
+status) with the file still on disk, so a probe can be fixed and rerun.
+With `path` only, the existing saved probe is re-executed unchanged and
+the run reports the same execution fields plus `executed`.
+
+**Outcome-C deviation, stated plainly.** The original round-12 ask was
+auto-run: writing or editing a probe through the GENERIC path tools
+would execute it. The engine contract (outcome C; DC-1/DC-2,
+`tmp/notes/round12-engine-contract.md`) makes that impossible without
+fighting the engine: generic `path_write` never consults a kind's
+operation table, and a `path_edit` override is treated as a content
+transform only, whose fixed result shape cannot carry an execution
+report. So the design deliberately does NOT try: the generic operations
+`path_write`, `path_edit`, `path_read`, `path_list`, `path_move`,
+`path_rename` and `path_delete` NEVER execute a probe — they are pure
+file operations over the kind root — and create-and-run lives in the
+`run` custom operation's `source` input, which is the channel custom
+operations provide (payload returned verbatim, exactly like
+`run_test`).
+
+**Execution environment.** Each run spawns a fresh UNSANDBOXED Ruby
+child. The child first preloads the owning checkout's `workflow.rb`
+(the same anchor chain as `run_test`, including the
+`PATH_KIND_PROJECT_ROOT` seam), then loads the probe file, so a probe
+can use Scout constants and naturally exercises imports OUTSIDE the
+Workspace bwrap grants — that reach is the motivating capability, not an
+accident. Process discipline: process-group kill, TERM, ten seconds of
+grace, then KILL; per-probe timeout 1..3600 seconds (default 120).
+Failures are normalized into Scout exceptions or structured envelopes —
+a non-Scout exception never escapes raw. The result reports
+`workflow_loaded` (the checkout the child loaded), the runner spelling,
+captured `stdout`/`stderr`, `exit_status`, `duration_seconds` and an
+`exit_class` of `completed`, `raised` or `timeout`.
+
+**Trust contract.** `run_probe` executes trusted Ruby with the caller's
+authority, outside any OS sandbox, and the `probe` kind is meant for
+ScoutCoder agents investigating the Scout framework itself — not for
+general computation (use a workflow task for that) and not for
+user-supplied untrusted code. Expose the kind (and the `run_probe`
+task) only to agents that may already execute trusted Ruby in this
+checkout.
+
 ### promote
 
 `path_promote` moves ONE resource from `tmp` to `project`. The
@@ -719,6 +785,12 @@ source draft moves ONLY that draft, and promoting a test moves only the
 test. To land a source AND its paired test, promote each resource
 yourself (the advisory pairing map above says where the test belongs);
 the agent, not the engine, owns that coordination.
+
+The `probe` kind has NO promote: it is a one-root kind (its only
+location is `tmp`, root `share/probes/`), there is no project
+destination, and the engine accordingly installs no `path_promote`
+support for it (a promote request is rejected with "Path kind probe
+does not support promote").
 
 ### Wiring after promotion (read this before promoting)
 
@@ -763,6 +835,15 @@ with `document_task` (see `## Testing` below).
   source is trusted code; expose the `test_file` kind (and the
   `run_test` task) only to agents that may already execute trusted Ruby
   in this checkout.
+- **`run_probe` executes UNSANDBOXED by design too** (round 12), with the
+  same registration shape (`:full`, `authorization: :read`) and the same
+  consequence: the kind declares `sandbox: true`, the probe path is
+  authorized as a read, and the fresh child runs the probe with the
+  caller's authority — deliberately outside the Workspace bwrap mounts,
+  so a probe can reach engine checkouts and other files no sandboxed exec
+  tool sees. This is the strongest authority ScoutCoder hands an agent:
+  reserve the `probe` kind for agents already trusted to run arbitrary
+  Ruby in this checkout.
 - **No kind relocates files outside its roots.** The round-9
   paired-test relocation hooks were removed in round-10 step 6; nothing
   writes outside the kind roots on promotion anymore, and the agent
@@ -773,9 +854,10 @@ with `document_task` (see `## Testing` below).
   files always load after their entity files (see `## LiveWorkflow` for
   the combined lib/share load order). The smoke hook catches a
   wrong-order draft because it runs in a fresh process.
-- Sandboxing is on for all five kinds: `entity`, `entity_property` and
-  `test_file` declare `sandbox: true` explicitly, `python_task` and the
-  `task` kind rely on the engine default, which is `true`. Roots are pinned to
+- Sandboxing is on for all six kinds: `entity`, `entity_property`,
+  `test_file` and `probe` declare `sandbox: true` explicitly,
+  `python_task` and the `task` kind rely on the engine default, which is
+  `true`. Roots are pinned to
   absolute paths at
   registration — the recommended spelling is a relative Scout path such as
   `Scout.share.tasks` or `Scout.lib['<workflow>'].tasks`, pinned against
@@ -784,23 +866,18 @@ with `document_task` (see `## Testing` below).
 
 ### When to use which
 
-Rule of thumb: the path tools address ONLY the five registered kinds; for
+Rule of thumb: the path tools address ONLY the six registered kinds; for
 any other file — wiring, docs, data, config — use Workspace.
 
-Use the generators to create a draft from scratch —
-[`define_task`](#define_task), [`define_helper`](#define_helper),
-[`define_entity`](#define_entity) and
-[`define_entity_property`](#define_entity_property) add the enclosing
-module and scaffolding and refuse to overwrite an existing file. (The
-Python equivalents [`define_python_task`](#define_python_task) and
-[`author_python_task_test`](#author_python_task_test) are superseded by
-the `python_task` kind and the `test_file` python tier — see their task
-entries.) Use the
-path tools to manage the lifecycle of a draft that already exists:
-`path_write` stores whole-file content you author, and the remaining
-tools read, edit, validate and promote what is there (plus `run_test` on
-the `test_file` kind; smoke exists on the source kinds only). See
-the `# Tasks` entries for generator input formats.
+Create a draft from scratch with `path_write` on the right kind — the
+kind root, the validation shape and (for the source kinds) registration
+on workflow reload all come with the kind. `path_write` stores
+whole-file content you author; the remaining tools read, edit, validate
+and promote what is there (plus `run_test` on the `test_file` kind,
+`run_probe` on the `probe` kind; smoke exists on the source kinds only).
+For a probe you specifically want saved-and-run in one call, `run_probe`
+with a `source` input does exactly that (see
+[probe run_probe](#probe-run_probe)).
 
 Worked example, one direction each way:
 
@@ -839,7 +916,7 @@ Choose the runner by what you are trying to establish:
 - Use `path_validate` to check a virtual resource's static shape and syntax.
 - Use `path_smoke` on `task`, `entity`, `entity_property`, or `python_task` to verify initialization/registration without executing domain behavior.
 - Use `run_test` for a test file managed by the `test_file` kind, including directory or suite scopes.
-- Use `run_task_test` / `run_helper_test` when their specialized authoring-task conventions fit the source.
+- Use `run_probe` for an unsandboxed one-off Scout-framework investigation snippet managed by the `probe` kind.
 - Use `run_task` to exercise a workflow task directly through the normal Scout job system. It is a behavior probe, not a substitute for an assertion-based test.
 - Use `job_info` and `job_status` to inspect an existing job without re-running it.
 
@@ -854,7 +931,11 @@ Test code is ordinary trusted program code. The general test-file lifecycle is:
 5. If the source and test should be permanent, promote each resource separately with `path_promote`. The engine moves one resource per operation; it does not move its paired test for you.
 6. After promoted source is wired into `workflow.rb`, re-run the test or relevant suite from a fresh process.
 
-For task drafts under `share/tasks/`, `author_task_test` and `run_task_test` remain useful when their convention fits. The paired test is `share/test/task/<task_name>.rb`. For shipped task code under `lib/<workflow>/tasks/<file>.rb`, the specialized convention is `test/<workflow>/tasks/test_<file>.rb`. Helper drafts can use `author_helper_test` / `run_helper_test`; helper code runs in a task Step context, so test through a disposable task/Step as appropriate. These specialized tasks coexist with `test_file` and its general `run_test` runner; choose one convention for the test you are authoring rather than creating duplicate tests without a reason.
+The paired-test tier conventions (`share/test/task/<name>.rb` on the
+tmp side, `test/<workflow>/tasks/test_<file>.rb` for shipped task code
+under `lib/<workflow>/tasks/`) remain the naming rule for a task's test;
+the `test_file` kind and `run_test` are the authoring and execution
+surface for both sides.
 
 A test file for the generic runner uses the Test::Unit shape:
 
@@ -938,25 +1019,6 @@ The `ScoutCoder:` comment convention (see the intro) closes its loop here: promo
 
 # Tasks
 
-## define_entity
-Create and register an entity module in this checkout
-
-Inputs: required `entity_name` and trusted Ruby `definition`; optional `base`
-(default `Entity`, or `EntityWorkflow`) and `identifiers` (TSV contents).
-Writes `share/entities/<entity>.rb` and reloads `workflow.rb` to register the
-module. See [Authoring <workflow> entities](#authoring-scoutcoder-entities)
-above for the input-body format, identifier-file conventions, limitations,
-and examples.
-
-## define_entity_property
-Add one property to an existing <workflow> entity
-
-Inputs: required `entity_name`, `property_name`, and trusted Ruby `definition`
-containing a matching `property :<property_name>` declaration. Writes
-`share/entity_properties/<entity>/<property>.rb`, reloads the workflow, and
-checks that the property is registered. See
-[Authoring <workflow> entities](#authoring-scoutcoder-entities) above.
-
 ## list_entities
 List all known entity modules and metadata
 
@@ -985,78 +1047,6 @@ Inputs: `workflow` and `task`. Reports static dependency declarations
 separately from dynamic dependency blocks. A dynamic block's presence does
 not enumerate the complete dependency list; the output explicitly marks the
 list as incomplete when applicable.
-
-## define_task
-Create a Scout workflow task draft
-
-Inputs: `task_name`, `definition`, and optional `export_type` and `workflow`.
-The definition is Ruby Scout DSL source: author any needed `desc`, `input`,
-and `dep` declarations and the matching `task :name => :type do ... end`.
-Inputs and dependencies are not inferred from the task body. The definition
-may declare additional tasks. The generator supplies the enclosing workflow
-module and, by default, `export :<task_name>`; set `export_type` to
-`export_exec` or `none` to change or omit that export. The task name must match
-`[a-z][a-z0-9_]*`, and the source must declare that task. It is syntax-checked
-and written to `share/tasks/<task_name>.rb` without overwriting an existing
-file. After writing it, the task reloads the workflow and verifies
-registration. Source is trusted Ruby code executed during loading; a load or
-registration failure can occur after the file is written.
-
-Example definition:
-
-```ruby
-definition = <<~'RUBY'
-  task :greeting_prefix => :string do
-    'Hello'
-  end
-  desc 'Greet someone'
-  dep :greeting_prefix
-  input :name, :string, 'Name to greet', 'World'
-  task :greet => :string do |name|
-    "#{step(:greeting_prefix).load}, #{name}!"
-  end
-RUBY
-
-ScoutCoder.job(:define_task,
-  task_name: 'greet',
-  definition: definition
-).run
-```
-
-Use `author_task_test` and `run_task_test` for the test loop. A task's draft
-documentation lives in its `desc`; when promoted into `lib/`, remove that
-`desc` and document it here with `document_task`.
-
-## define_helper
-Create a Scout workflow helper draft
-
-Inputs: `helper_name`, `definition`, and optional `workflow`. The definition
-must include the matching `helper :<helper_name> do |args...|` declaration
-and body. The generator supplies the enclosing workflow module but does not
-infer the helper's arguments or behavior. The name must match
-`[a-z][a-z0-9_]*`; the source is syntax-checked and written to
-`share/helpers/<helper_name>.rb` without overwriting an existing file. The
-workflow reloads and verifies registration. Source is trusted Ruby code run
-during loading; a load or registration failure can occur after the file is
-written.
-
-Example definition:
-
-```ruby
-definition = <<~'RUBY'
-  helper :join_parts do |left, right|
-    "#{left}-#{right}"
-  end
-RUBY
-
-ScoutCoder.job(:define_helper,
-  helper_name: 'join_parts',
-  definition: definition
-).run
-```
-
-Helpers run in a workflow Step context; for tests, declare a disposable task
-that calls the helper and run that task's Step.
 
 ## define_python_task
 Create a Python-backed Scout task source file (SUPERSEDED — prefer the `python_task` path kind)
@@ -1110,9 +1100,6 @@ inspection or reload fails after creation, the candidate remains on disk for
 inspection; the error identifies that state. This executes trusted Python
 source during metadata inspection.
 
-inspection; the error identifies that state. This executes trusted Python
-source during metadata inspection.
-
 **Superseded by the `python_task` path kind** (round 11), which manages
 the same files with the generic `path_*` operations plus validate, smoke
 and promote: use `path_write kind=python_task path=<name>` to author a
@@ -1136,49 +1123,6 @@ discovery or execution behavior.
 writes the same `python/test/test_<name>.py` file as a managed resource,
 and `run_test` executes it (previously nothing ran these files). This
 task remains functional; its removal is the user's decision.
-
-## author_helper_test
-Create a test for an existing ScoutCoder-authored workflow helper
-
-Inputs: `helper_name` and `test_source`. Writes a syntax-checked test to
-`share/test/helper/<helper_name>.rb`; existing tests are never overwritten.
-Because workflow helpers execute in a task Step context, helper tests should
-declare a disposable fake task that calls the helper, run that task's Step,
-and assert its result. Test source is trusted Ruby code and is not OS-sandboxed.
-
-## run_helper_test
-Run an authored helper test in a fresh Ruby process
-
-Inputs: `helper_name` and positive `timeout_seconds` (default 120). Loads the
-current workflow and authored helper files, then runs the paired test. Returns
-pass/fail, exit status, captured output, and timeout status. Persistent Step
-results are not cleared automatically; tests should clean their fake-task Step
-when freshness matters.
-
-## author_task_test
-Create a test for an existing ScoutCoder-authored task
-
-Inputs: `task_name` and `test_source`. The paired test is written following
-the task's source location: `share/test/task/<task_name>.rb` for tasks
-authored under `share/tasks`, or `test/<workflow>/tasks/test_<file>.rb` for
-tasks in `lib/<workflow>/tasks`. The task name must match
-`[a-z][a-z0-9_]*`, and the corresponding task source must exist. The source
-is Ruby syntax-checked before writing; an existing test file is never
-overwritten. The test is not run during creation. Use `run_task_test` to
-execute it. Test source is trusted code and is not OS-sandboxed.
-
-## run_task_test
-Run an authored task test in a fresh Ruby process
-
-Inputs: `task_name` and positive `timeout_seconds` (default 120). Loads the
-current `workflow.rb` (including every authored task file), then executes
-the paired test - `share/test/task/<task_name>.rb` for tasks under `share/tasks`,
-or `test/<workflow>/tasks/test_<file>.rb` for tasks in `lib/<workflow>/tasks`
-- with `lib/` on the Ruby load path. Returns pass/fail, exit status, standard
-output and standard error, timeout status, and the invocation details. A fresh
-Ruby process loads current source and task discovery, but does not clear
-persistent Scout job caches; tests should explicitly clean jobs where
-freshness matters.
 
 ## run_test
 Run test files through the `test_file` path kind
@@ -1205,6 +1149,28 @@ and [Trust boundaries](#trust-boundaries). Discovering zero test files is a
 exit status/classification (`clean_pass`, `assertion_failure`, `load_error`,
 `timeout`), test/assertion counts, captured output, and distinct `passed`
 and `ran` fields. Persistent Scout job caches are not cleared automatically.
+
+## run_probe
+Run one probe through the `probe` path kind
+
+Inputs: `path` (the bare probe name; single-probe scope only), optional
+`source` (complete probe Ruby source; when given the probe is written,
+syntax-checked and executed in one call) and optional `timeout_seconds`
+(integer 1..3600, default 120). The target is resolved through the
+`probe` kind, then dispatched. See
+[`### probe run_probe`](#probe-run_probe) for the create-and-run
+semantics, the independent saved/syntax/execution outcomes, and the
+execution environment.
+
+**Execution is unsandboxed** and runs trusted code with the caller's
+authority — deliberately outside Workspace sandbox grants, so a probe can
+read engine checkouts and any other file the caller can reach. It is
+ScoutCoder-only, for investigating the Scout framework. A runtime failure
+is reported (`exit_class=raised`, exception class and message, stderr,
+exit status) and NEVER reverts or deletes the saved source; a syntax
+failure reports `syntax_ok: false` and skips execution entirely.
+`workflow_loaded` records the checkout whose `workflow.rb` the child
+preloaded.
 
 ## document_task
 Add or replace a task entry in the <workflow> README.md Tasks section
@@ -1342,5 +1308,3 @@ List the workflows installed and available to ScoutCoder
 This task unions `Workflow.installed_workflows`, a purely local scan of the `workflows` pathmap that never triggers network autoinstall, with the workflow modules already loaded in the current process. The combined list is deduplicated and sorted, and the local scan is wrapped in a rescue so the task never crashes.
 
 It is the discovery step for workflow names: any name it returns is usable as the `repo` input of `help_list_repo_documents` and `help_get_repo_document`, which then read the workflow's own `README.md`, `doc*/`, and `research/` documentation.
-It is the discovery step for workflow names: any name it returns is usable as the `repo` input of `help_list_repo_documents` and `help_get_repo_document`, which then read the workflow's own `README.md`, `doc*/`, and `research/` documentation.
-

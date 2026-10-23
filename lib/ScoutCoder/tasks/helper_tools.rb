@@ -1,7 +1,8 @@
 require_relative '../helper_test_support'
 
 module ScoutCoder
-  # Promoted tasks: documentation lives in README.md, not desc.
+  # Unimported task file (workflow.rb require commented out; README entries
+  # removed in round 12). Successor: the task path kind + test_file kind.
   input :workflow, :string, 'Workflow whose authored helper test is being created', 'ScoutCoder'
   input :helper_name, :string, 'Existing ScoutCoder-authored workflow helper name'
   input :test_source, :text, 'Ruby test source; define a disposable task that invokes the helper within a Step'
