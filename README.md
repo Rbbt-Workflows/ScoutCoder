@@ -78,7 +78,7 @@ Open.consume_stream io
 
 - [Development doctrine and tool selection](#development-doctrine-and-tool-selection) — tool table, layered validation, execution vs file authorization, fresh process vs fresh result, promotion.
 - [Layout conventions](#layout-conventions) and [LiveWorkflow](#liveworkflow) — directory layout and the `share/` draft-loading contract.
-- [Authoring ScoutCoder entities](#authoring-scoutcoder-entities) — entity, property and Python task authoring formats.
+- [Authoring ScoutCoder entities](#authoring-scoutcoder-entities) — entity, property and Python task authoring formats, [property dispatch types and receiver shape](#property-dispatch-types-arity-and-receiver-shape), [production versus development dispatch](#production-versus-development-dispatch).
 - [Agent path kinds](#agent-path-kinds) — kinds and roots, [kind locations](#kind-locations), [validate](#validate), [test_file run_test](#test_file-run_test), [probe run_probe](#probe-run_probe), [promote](#promote), [wiring after promotion](#wiring-after-promotion-read-this-before-promoting), [trust boundaries](#trust-boundaries), [when to use which](#when-to-use-which).
 - [Testing and execution](#testing-and-execution) — choosing a runner, [authoring and running tests](#authoring-and-running-tests), where job outputs land, [running a task directly](#running-a-task-directly), [documentation during promotion](#documentation-during-promotion).
 - [# Tasks](#tasks) — per-task reference entries: test runners, probe runner, job inspection, documentation lookup.
@@ -295,6 +295,62 @@ module DemoWidget
   end
 end
 ```
+
+### Property dispatch types (arity) and receiver shape
+
+The four property types — `:single`, `:array`, `:multiple`, `:both` (the
+default when the declaration is a bare `property :name do`) — decide both
+what the block receives and what the caller gets back. Scout-gear authority:
+`doc/user/WorkingWithEntities.md` § "Properties" (the two up-front behaviors)
+and `doc/developer/EntitySystem.md` § "Property dispatch" (the full matrix,
+including the single-receiver return cell).
+
+| type x receiver | block input (self) | return shape |
+|---|---|---|
+| `:single`, single entity | the entity itself, once | block result |
+| `:single`, list receiver | each member, once per member | Array of per-member results |
+| `:array`, list receiver | the whole list, once | block result, unchanged |
+| `:array`, single entity | one-element array (`make_array`, property.rb:141) | **collapsed**: `Array === res ? res[0] : res[self]` (property.rb:142) |
+| `:multiple`, list receiver | the whole list, once | Array: `responses.values_at(*self)` (property.rb:98) |
+| `:multiple`, single entity | one-element array (`make_array`) | collapsed `res[0]`/`res[self]`, like `:array` |
+| `:both`, single entity | the entity as-is | block result |
+| `:both`, list receiver | the whole list, once (no wrapper; property.rb:114) | block result |
+
+Two traps the probe evidence confirmed (Cortex
+`research/w3-w5-verified-facts.md`):
+
+- A single receiver on an `:array`/`:multiple` property **wraps the block's
+  self into a one-element array but collapses the return value to its first
+  element** (property.rb:141-142). The "cast into an array" intuition is right
+  only about the block receiver; the return is `res[0]`. Use
+  `mod.setup(id).make_array` to get the full Array result instead.
+- `:multiple`'s generated method probes the per-item cache first and computes
+  only missing members (property.rb:74-96), but **the cache layer itself is
+  `Entity.persist`** (property.rb:149-154, dir `var/entity_property`), which
+  wraps every arity's real method (property.rb:108-110) — and it caches ONLY
+  when `persist` is declared; otherwise options are `{persist: false}` and
+  nothing is persisted. `:single2array`/`:array2single` are aliases of
+  `:single`/`:array` (property.rb:51-54).
+
+`path_write kind=entity_property` records NO arity metadata: the generator
+`EntityDefinitionSupport.property_source` (entity_tools.rb:292-298) only wraps
+the authored text, the property type lives inside the `property :x => :type`
+declaration, and `effective_dispatch` (entity_tools.rb:394) later INFERS the
+type from the registered accessor. The draft carries the type; nothing else
+records it.
+
+### Production versus development dispatch
+
+There are two distinct surfaces for dispatching a property. A production
+dispatch surface — such as Semantics' `entity_property` task — dispatches
+what its own process loaded; it deliberately does NOT reload drafts defined
+after its process started, so a fresh `share/` draft is invisible to it until
+that process reloads the workflow. That is expected behavior, not a defect.
+Development verification of a fresh draft therefore goes through `run_probe`
+(see [probe run_probe](#probe-run_probe)): its fresh child preloads the
+owning checkout's `workflow.rb`, so LiveWorkflow live-loads the current
+`share/` drafts and the probe dispatches the property exactly as a
+newly-loaded process would.
 
 Scout-gear's `LiveWorkflow` loader loads entity drafts before
 recursively loading property drafts in sorted order (see Layout
@@ -1177,6 +1233,14 @@ Inputs: `workflow` and `task` (required strings). Returns the task description
 and result type, plus `direct_inputs` and `recursive_inputs`. Each input entry
 includes its name, type, description, default, and whether it is required.
 This inspection does not execute the task.
+
+Input propagation (scout-gear `doc/user/BuildingWorkflows.md` § dependencies):
+unset dependency inputs propagate recursively — a blockless `dep` forwards
+every caller input the dependency task declares, whether or not the parent
+mentions it — and those recursive inputs are exactly what agent-exposed
+workflow tools present (the tool schema is built from `task_info[:inputs]` =
+`rec_inputs(name).uniq`). Re-declaring a dependency input on the parent is
+free and merely lets the parent block see the value.
 
 ## run_task
 Run a workflow task synchronously

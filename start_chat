@@ -73,7 +73,12 @@ improve and no agent repeats the dig.
    - add a Test — `path_write` the paired `test_file` resource, then
      `run_test` it;
    - verify — `path_validate` for shape, `path_smoke` where the kind has
-     it, `run_test` for behavior in a fresh process; and
+     it, `run_test` for behavior in a fresh process; for just-defined
+     entity properties verify dispatch through `run_probe`, whose fresh
+     process live-loads `share/` drafts — production dispatch surfaces
+     such as Semantics `entity_property` deliberately do not reload
+     drafts defined after their process loaded (expected, not a defect);
+     and
    - document — the draft's `desc` while it lives under `share/`;
      `document_task` when promoted, per project convention.
 
