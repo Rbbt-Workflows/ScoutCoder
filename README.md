@@ -483,9 +483,12 @@ the two custom operations installed as their own tools: the
 `test_file`-kind `run_test` and the `probe`-kind `run_probe`. ScoutCoder
 does not register a `test` capability or handler;
 explicit test execution is provided by `run_test`.
-`path_patch` is not offered for any kind. The kinds travel
-only with the whole-workflow `tool: ScoutCoder` introduction: a task-level
-tool line registers no kinds.
+`path_patch` is not offered for any kind. Which kinds an agent receives is
+decided by the `path_kind:` chat role, not by tool lines: an explicit
+`path_kind: ScoutCoder` line loads all six kinds, `path_kind: ScoutCoder
+probe` loads only `probe` (names accumulate across lines and within a
+line), and a task-level tool line registers no kinds. Agents without a
+start_chat file default to loading every kind of their own workflow.
 
 **Canonical note on the removed legacy `path_test`.** The Scout-AI
 engine's older built-in `test` operation conflated test creation and
