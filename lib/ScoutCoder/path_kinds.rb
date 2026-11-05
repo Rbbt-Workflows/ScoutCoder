@@ -56,6 +56,7 @@ require 'json'
 require_relative 'python_task_support'
 
 require_relative 'path_kinds/support'
+require_relative 'path_kinds/workflow_reload'
 require_relative 'path_kinds/test_file'
 require_relative 'path_kinds/task'
 require_relative 'path_kinds/entity'

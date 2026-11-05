@@ -595,11 +595,15 @@ module ScoutCoder
     # `validate` is the static check and `run_test` is the executing check,
     # reporting `executed`/`passed` and the exit status separately.)
 
-    # Declarative destination; NO promotion_post_move hook (a test has no
-    # paired test). The engine resolves the same virtual path at the
-    # project location through the resolve hook, which rewrites the
-    # spelling, and performs the move itself.
+    # Declarative destination; a test has no paired test, so the round-10
+    # step-6 contract (no paired-test relocation hook) is unchanged.
+    # (Reload build, step 3) the engine move is followed by the shared
+    # post-move workflow reload (ScoutCoder::WorkflowReload::
+    # PROMOTION_POST_MOVE): a promoted project-side test can only run
+    # correctly when the owning checkout's current code is loaded; purge +
+    # re-evaluate, never a writer.
     'promotion_destination' => 'project',
+    'promotion_post_move' => ScoutCoder::WorkflowReload::PROMOTION_POST_MOVE,
 
     'operations' => {
       'run_test' => {

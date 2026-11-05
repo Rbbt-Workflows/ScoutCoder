@@ -302,8 +302,11 @@ class TestPathKinds < Test::Unit::TestCase
 
     r = promote(kind, name)
 
-    assert_equal true, r['promoted']
-    refute r.key?('post_move'), 'no promotion_post_move hook exists anymore'
+    # (Reload build, step 3) the promotion_post_move hook now EXISTS (shared
+    # ScoutCoder::WorkflowReload::PROMOTION_POST_MOVE). This sandbox has no
+    # workflow checkout above the destination, so the hook's root derivation
+    # fails LOUDLY by contract; the engine's move itself stands (below).
+    assert_match(/no workflow\.rb found above/, r['exception'].to_s)
 
     after = snapshot_tree(@sandbox)
     added = after.keys - before.keys
@@ -337,8 +340,9 @@ class TestPathKinds < Test::Unit::TestCase
 
     r = promote(kind, vpath)
 
-    assert_equal true, r['promoted']
-    refute r.key?('post_move'), 'no promotion_post_move hook exists anymore'
+    # (Reload build, step 3) same as the entity canary: the hook exists and
+    # fails loudly here (sandbox root has no workflow.rb); engine move stands.
+    assert_match(/no workflow\.rb found above/, r['exception'].to_s)
 
     after = snapshot_tree(@sandbox)
     assert_equal ["lib/ScoutCoder/entity/#{entity}/#{property}.rb"], (after.keys - before.keys).sort
@@ -361,10 +365,13 @@ class TestPathKinds < Test::Unit::TestCase
 
   # -------------------------------------------------------- trust boundary
 
-  # What this proves, stated honestly for engine 4680bd9: since round-10
-  # step 6 NO kind registers promotion_post_move, so a promotion moves ONLY
-  # the primary source to the primary destination and leaves the paired
-  # test untouched — there is no relocation path left anywhere.
+  # What this proves, stated honestly for engine 4680bd9: since the reload
+  # build (step 3) the five promoting kinds register the SHARED
+  # promotion_post_move hook (ScoutCoder::WorkflowReload::PROMOTION_POST_MOVE,
+  # purge + re-evaluate only, never a writer), so a promotion moves ONLY the
+  # primary source to the primary destination via the ENGINE and then
+  # reloads the owning workflow checkout; there is still no relocation path
+  # anywhere (the paired test is never touched by the hook).
   # Engine authorization note: path_authorize! resolves a kind
   # root (path.rb:1160-1169) but does NOT pass it to
   # LLM::Sandbox.authorize_path (path.rb:1171), whose effective grant is

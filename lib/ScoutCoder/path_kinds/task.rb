@@ -243,7 +243,13 @@ module ScoutCoder
       # the engine (it would have to run before the destination is
       # authorized). The engine authorizes both endpoints and performs the
       # move itself.
-      'promotion_destination' => 'project'
+      'promotion_destination' => 'project',
+
+      # (Reload build, step 3) after the engine's move, reload the owning
+      # workflow checkout so the promoted lib file takes effect in the
+      # running process. Shared hook (ScoutCoder::WorkflowReload::
+      # PROMOTION_POST_MOVE): purge + re-evaluate only, never a writer.
+      'promotion_post_move' => ScoutCoder::WorkflowReload::PROMOTION_POST_MOVE,
 
       # (Round 10, step 6: the paired-test RELOCATION hook is REMOVED.
       # Test files are first-class `test_file` kind resources that promote

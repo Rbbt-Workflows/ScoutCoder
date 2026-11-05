@@ -194,7 +194,12 @@ module ScoutCoder
         end
       end,
 
-      'promotion_destination' => 'project'
+      'promotion_destination' => 'project',
+
+      # (Reload build, step 3) post-move workflow reload (shared hook,
+      # ScoutCoder::WorkflowReload::PROMOTION_POST_MOVE): purge +
+      # re-evaluate the owning checkout, never a writer.
+      'promotion_post_move' => ScoutCoder::WorkflowReload::PROMOTION_POST_MOVE,
 
       # (Round 10, step 6: the paired-test RELOCATION hook is REMOVED.
       # Test files are first-class `test_file` kind resources that promote

@@ -286,10 +286,14 @@ module ScoutCoder
       # Python task is inert until that discovery runs (workflow reload,
       # or an explicit PythonWorkflow.load_directory / python_task call),
       # and its documentation moves to README per project convention.
-      # No promotion_post_move hook is registered (round-10 step 6
-      # contract): the engine moves exactly one resource and the agent
-      # owns any paired-test coordination.
-      'promotion_destination' => 'project'
+      # (Reload build, step 3) the engine move is followed by the shared
+      # post-move workflow reload (ScoutCoder::WorkflowReload::
+      # PROMOTION_POST_MOVE): purge + re-evaluate the owning checkout so
+      # the python/tasks discovery sees the promoted file on the next
+      # load; the hook is never a writer. The round-10 RELOCATION contract
+      # (no paired-test relocation) is unchanged.
+      'promotion_destination' => 'project',
+      'promotion_post_move' => ScoutCoder::WorkflowReload::PROMOTION_POST_MOVE
   }.freeze
 
   module_function

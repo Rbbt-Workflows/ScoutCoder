@@ -201,6 +201,44 @@ loaded-but-not-re-evaluated case (a workflow object already in memory), call
 extended hook. Re-loading never raises on re-declaration: tasks reassign,
 helpers redefine, and re-extending Entity is expected behavior.
 
+Workflow-level reload (reload build, steps 1-5). `require_workflow` with
+`update: true` re-evaluates `workflow.rb` but does NOT re-run its
+`require_relative` lines while the lib files sit in `$LOADED_FEATURES` —
+that is exactly the staleness promoted or edited lib code used to leave in a
+running process. ScoutCoder therefore ships a full workflow-level reload,
+`ScoutCoder::WorkflowReload.reload_workflow!(root:)`
+(`lib/ScoutCoder/path_kinds/workflow_reload.rb`; agent surface: the
+[`reload_workflow`](#reload_workflow) task):
+
+- Purge composition: every `$LOADED_FEATURES` `.rb` entry whose realpath
+  falls under the realpathed target checkout root — the entrypoint
+  `workflow.rb` included when it is a feature entry (child processes whose
+  loader does `require './workflow'` do cache it; `require_workflow`
+  itself evaluates the entrypoint with `Kernel#load` and never does).
+  Framework features outside the root always stay.
+- Normalization: `File.realpath` on BOTH sides — feature entry and root.
+  Alias mount spellings (`/home/...` vs `/bulk/...`) and symlinked roots
+  differ lexically; realpath is what collapses them (verified, step 1).
+- Re-entry: after the purge, `Workflow.require_workflow(<entrypoint>,
+  update: true)` re-evaluates `workflow.rb` and its `require_relative`
+  lines re-fire; when the entrypoint itself was purged, a plain `require`
+  re-executes it first (report mode `required` vs `re-evaluated`).
+- Memo handling: re-evaluation returns the SAME workflow module object,
+  so `ScoutCoder.target_workflow`'s `@@target_workflow` memo survives a
+  reload untouched — the reloaded workflow IS the memoized object.
+- Ruby caveat (documented, not fixed by any reload): reloading does not
+  undo previous execution. Already-instantiated Step objects keep the old
+  method definitions; consumers re-resolve through the module. A fresh
+  process is the only full reset.
+- Idempotence: safe to repeat; the second reload purges the features the
+  first reload re-cached and re-fires again — correct, not a no-op.
+- Silent reload bookkeeping: the helper calls `require_workflow` with
+  `silent: true`, which removes the workflow's entry from
+  `Workflow.workflows` just before the re-evaluation re-registers it —
+  without it each reload would append a duplicate; the immediate
+  re-registration restores membership, and no output difference was
+  observed either way.
+
 Hand-authored task and helper draft files loaded by `LiveWorkflow` must wrap
 declarations in the target workflow module (`module MyWorkflow ... end`),
 because `Kernel#load` evaluates each file at top level. Entity and property
@@ -931,6 +969,32 @@ never edit `workflow.rb`. A promoted task also moves its documentation:
 remove the `desc` and write the entry in this README's `# Tasks` section
 with `document_task` (see `## Testing` below).
 
+Reload after promotion and after lib edits (reload build, steps 3-4).
+Since the reload build, promotion no longer leaves the running process on
+stale definitions, and lib-location edits have an explicit reload surface:
+
+- **Promotion auto-reloads.** The five promoting kinds (`task`, `entity`,
+  `entity_property`, `python_task`, `test_file`) register the engine's
+  `promotion_post_move` hook with one shared lambda
+  (`ScoutCoder::WorkflowReload::PROMOTION_POST_MOVE`): after the engine
+  has performed the move — the hook is never the writer — it derives the
+  owning checkout root from the promote args (climbing to the first
+  directory containing `workflow.rb`; a foreign root fails loudly, which
+  the engine surfaces with the completed move intact) and runs the full
+  workflow reload. The wiring line in `workflow.rb` is still the agent's
+  explicit edit (the hook reloads the checkout; it does not wire anything),
+  but once wired-or-not, the process sees current code. Known behavior,
+  not a defect: the `path_promote` TOOL result does not surface the
+  hook's `post_move` report — the reload's effect is evidenced by outcome
+  (the promoted code registered and runnable), not by a visible field.
+- **Lib writes/edits reload explicitly.** After a `path_write`/`path_edit`
+  or Workspace edit under `lib/`, invoke the
+  [`reload_workflow`](#reload_workflow) task (default root: this
+  checkout). Nothing runs automatically on write or edit: generic path
+  operations never execute kind code (the no-autorun contract, round 12),
+  so the explicit invocation mirrors how `run_test` is invoked after
+  writing a test.
+
 ### Trust boundaries
 
 - **`run_test` executes UNSANDBOXED by design** (round-10 step 6). The
@@ -1348,3 +1412,21 @@ List the workflows installed and available to ScoutCoder
 This task unions `Workflow.installed_workflows`, a purely local scan of the `workflows` pathmap that never triggers network autoinstall, with the workflow modules already loaded in the current process. The combined list is deduplicated and sorted, and the local scan is wrapped in a rescue so the task never crashes.
 
 It is the discovery step for workflow names: any name it returns is usable as the `repo` input of `help_list_repo_documents` and `help_get_repo_document`, which then read the workflow's own `README.md`, `doc*/`, and `research/` documentation.
+
+## reload_workflow
+
+Inputs: optional `root` (path to a workflow checkout — a directory containing `workflow.rb`). When omitted, the root defaults to the ScoutCoder checkout itself, since ScoutCoder's own lib/ edits are the live concern; pass `root` explicitly to reload any other workflow checkout.
+
+Behavior: purges every `$LOADED_FEATURES` entry whose realpath falls under the realpathed checkout root (the entrypoint `workflow.rb` included when it is cached — child processes that `require './workflow'` cache it), then re-evaluates `workflow.rb` (`require_workflow`, `update: true`, or a plain re-require when the entrypoint itself was purged) so its `require_relative` lines re-fire and lib/ edits and promotions take effect immediately. Never purges features outside the given root; framework features always stay. The `@@target_workflow` memo is untouched by contract: re-evaluation returns the same workflow module object, so the memo remains valid.
+
+Returns a report Hash: `ok`, `root` (realpathed), `entrypoint`, `purged` (the feature entries removed, as spelled), `workflow` (module name), `reload` (`'required'` when the entrypoint itself was purged and re-required, `'re-evaluated'` otherwise).
+
+Failure modes: `ParameterException` when `root` is missing/not a directory, or when it is a directory without a `workflow.rb` (this task only reloads real workflow checkouts). Errors are loud, never swallowed.
+
+Caching note: a directory-valued `root` is digested by its file
+listing, so the same root replays its cached report on repeated calls;
+pass `clean: true` (or `job.clean`) when the reload itself — not the
+report — is what you need fresh.
+
+Usage pattern: this is the explicit reload surface for lib-location writes/edits (`path_write`/`path_edit`/Workspace edits under `lib/`): automatic triggering from generic path operations is forbidden by the no-autorun contract, so callers invoke this task after editing, mirroring how `run_test` is invoked after writing a test. Promotions (`path_promote`) fire the same reload automatically through the `promotion_post_move` hook.
+
