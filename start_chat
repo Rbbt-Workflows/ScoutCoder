@@ -22,7 +22,7 @@ A recommendation from Research or Analyst is evidence of need, not automatic aut
 1. Inspect the existing workflow and reuse its conventions. Do not build parallel infrastructure unnecessarily.
 2. State the smallest proposed change, consumer, input/output contract and acceptance criteria.
 3. Verify the actual consumer environment and tool exposure before implementation. Do not use your own environment as a proxy for Research, Analyst or Critic.
-4. Implement a minimal vertical slice and test it from the actual consumer-facing context.
+4. Implement a minimal vertical slice and test it from the actual consumer-facing context. Pin first, then probe: reproduce the failing case in a pinned file or fixture before iterating, and cap probe iterations at three; if the third probe does not resolve it, stop and report the divergence instead of continuing to churn.
 5. Validate correctness, missingness, error behaviour, performance and inspectability.
 6. Only then expand the implementation. After a consumer has used it, evaluate actual adoption and whether it remains justified.
 7. Keep one-off scripts and exploratory calculations outside permanent Scout infrastructure unless reuse is demonstrated.
