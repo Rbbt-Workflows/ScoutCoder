@@ -1,4 +1,4 @@
-ScoutCoder=/$PWD filter="*.rb *.rake Rakefile *.rdoc *.R *.sh *.js *.haml *.sass *.txt *.conf *.slim *.haml" {
+ScoutCoder=/$PWD filter="*.rb *.md *.rake Rakefile *.rdoc *.R *.sh *.js *.haml *.sass *.txt *.conf *.slim *.haml" {
  README.md
  workflow.rb
  start_chat
@@ -67,6 +67,44 @@ ScoutCoder=/$PWD filter="*.rb *.rake Rakefile *.rdoc *.R *.sh *.js *.haml *.sass
  }
  share=share{
   tasks=tasks{
+  }
+ }
+
+ doc=doc {
+  developer=developer {
+   Layout.md
+   LiveWorkflow.md
+   PathKindsInternals.md
+   PropertyDispatch.md
+   README.md
+   Testing.md
+  }
+  user=user {
+   AuthoringEntities.md
+   Documentation.md
+   PathKinds.md
+   README.md
+   Testing.md
+   ToolSelection.md
+  }
+ }
+
+ skills=skills {
+  scoutcoder-entity-authoring=scoutcoder-entity-authoring {
+   SKILL.md
+  }
+  scoutcoder-help-discovery=scoutcoder-help-discovery {
+   SKILL.md
+  }
+  scoutcoder-path-kinds-lifecycle=scoutcoder-path-kinds-lifecycle {
+   SKILL.md
+  }
+  scoutcoder-repo-documentation=scoutcoder-repo-documentation {
+   SKILL.md
+   agent-surfaces.md
+   doc-areas.md
+   other-repos.md
+   workflow-readme.md
   }
  }
 
