@@ -24,7 +24,7 @@ duplicate them here.
 | New entity module | `path_write kind=entity path=<Name>` | `share/entities/<Name>.rb` |
 | Property on an entity | `path_write kind=entity_property path=<Entity>/<prop>` | `share/entity_properties/<Entity>/<prop>.rb` |
 | Python-backed task | `path_write kind=python_task path=<name>` | the kind's registered root |
-| Test for any of the above | `path_write kind=test_file path=...` | paired-test location |
+| Test for any of the above | `path_write kind=test_file path=entity_property/Gene/onset` (canonical virtual path) | paired-test location |
 
 Hand-placing these files under `share/` duplicates what the kinds do
 (extension-free paths, root validation, reload registration) and skips
@@ -58,7 +58,8 @@ run them, and the full validate→smoke→promote order are the sibling
 skill's territory (`scoutcoder-path-kinds-lifecycle`).
 
 Do not treat file existence or successful validation as proof the entity
-works; dispatch behavior is exercised through `run_task`/`run_test`.
+works; dispatch behavior is exercised through `run_task` or
+`path_run` (`kind: "test_file"`).
 
 ## Identifier TSVs and Python tasks (what to author)
 
@@ -80,7 +81,8 @@ A production dispatch surface (such as Semantics' `entity_property` task)
 dispatches what its own process loaded and does NOT reload `share/` drafts
 defined after it started — a fresh draft is invisible to it until that
 process reloads. Development verification of a fresh draft therefore goes
-through `run_probe` (fresh child, preloads the owning checkout's
+through `path_run` with `kind: "probe"` (fresh child, preloads the
+owning checkout's
 `workflow.rb`, dispatches exactly as a newly loaded process would). The
 full dispatch matrix of the four property types:
 [doc/developer/PropertyDispatch.md](../../doc/developer/PropertyDispatch.md).

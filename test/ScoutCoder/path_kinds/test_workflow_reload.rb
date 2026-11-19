@@ -503,18 +503,23 @@ class TestWorkflowReload < Test::Unit::TestCase
     FileUtils.rm_rf(sandbox) if sandbox
   end
 
-  # (3e) Root derivation is deterministic and loud: no promotion_target is
-  # a ParameterException, and so is a target outside any workflow
-  # checkout (climb exhausted).
+  # (3e) Root derivation is deterministic: no promotion_target raises (the
+  # only raise left — nothing to anchor a report on); a target outside any
+  # workflow checkout RETURNS 'reload_failed' with the climb diagnostic
+  # (WO5 reconciliation: the destination is known, so the caller must see
+  # the completed-move receipt).
   def test_hook_root_derivation_fails_loudly
     assert_raise(ParameterException) { hook.call(nil, 'task/x', 'project', {}) }
 
     outside = File.join(@sandbox, 'plain', 'deeper', 'file.rb')
     FileUtils.mkdir_p(File.dirname(outside))
     File.write(outside, 'x')
-    e = assert_raise(ParameterException) do
-      hook.call(nil, 'task/x', 'project', {'promotion_target' => outside})
-    end
-    assert_match(/no workflow\.rb found above/, e.message)
+    r = hook.call(nil, 'task/x', 'project', {'promotion_target' => outside})
+    assert_equal 'reload_failed', r['promotion_status']
+    assert_equal 'workflow_reload', r['post_move']
+    assert_equal false, r['reload']['ok']
+    assert_match(/no workflow\.rb found above/, r['reload']['error'])
+    assert_includes r['reload']['error'], outside
+    refute r['reload'].key?('root'), 'no root was derivable'
   end
 end

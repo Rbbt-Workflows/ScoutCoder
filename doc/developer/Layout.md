@@ -48,7 +48,10 @@ a controlled `ParameterException` ("Unknown repo or workflow: <name>").
   `list_entities` (`tasks/entity_tools.rb`), and the shared runner/support
   modules (`test_file_support.rb`, `probe_support.rb`,
   `python_task_support.rb`; the legacy task-test and helper-test supports
-  were retired in round 13 together with their unimported task files). The
+  were retired in round 13, and the two exported runner task files
+  (`test_runner_tools.rb`, `probe_tools.rb`) were deleted in round 14 —
+  their runners live on only as these
+  support modules behind the `path_run` custom operation). The
   built-in entity tree under `lib/ScoutCoder/entity/` is not present.
 - `share/` - the authoring-drafts convention. `share/tasks/`,
   `share/helpers/`, `share/entities/` and `share/entity_properties/` hold
@@ -63,12 +66,13 @@ a controlled `ParameterException` ("Unknown repo or workflow: <name>").
 - `share/test/` - test-file drafts, including the conventional `task/`,
   `helper/`, `entity/`, `entity_property/`, `python_task/` and
   `integration/` tiers. They are never loaded by LiveWorkflow; the
-  `test_file` path kind and `run_test` own their lifecycle. (The directory
+  `test_file` path kind and `path_run` own their lifecycle. (The directory
   is absent in this checkout today; it is created when the first test draft
   is written.)
 - `share/probes/` - probe snippets (round 12): unsandboxed, one-off Ruby
   investigations of the Scout framework itself, managed by the `probe` path
-  kind and executed by `run_probe`. Never loaded by LiveWorkflow and never
+  kind and executed by `path_run` (`kind: "probe"`). Never loaded by
+  LiveWorkflow and never
   executed by any generic path operation.
 - `share/entity/` - identifier TSVs (`<entity>.identifiers.tsv`) written by
   the entity-authoring flow. Data, not code: they are registered by the

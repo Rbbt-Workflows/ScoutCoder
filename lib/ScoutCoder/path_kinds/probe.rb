@@ -9,13 +9,13 @@
 #     and path_edit treats an override as a :content transform only,
 #     with a :full-typed override crashing (DC-2) — so NO auto-run hook
 #     inside generic write/edit; execution is delivered exclusively
-#     through the custom operation below, the same channel run_test uses;
+#     through the custom operation below, the same channel the test_file kind uses;
 #   * one-root, promote-less kinds register, list, resolve and validate
 #     cleanly (question c, green) — path_promote is simply not installed.
 #
 # Capabilities: validate (syntax-only, NEVER executes) plus ONE custom
-# operation `run_probe` (:full handler, authorization: :read, mirroring
-# run_test's registration). NO smoke, NO promote. Generic
+# operation `path_run` (:full handler, authorization: :read, mirroring
+# the test_file kind's registration). NO smoke, NO promote. Generic
 # read/list/move/rename/delete come from the engine with zero implicit
 # execution; patch and test stay off.
 #
@@ -23,20 +23,20 @@
 # sketch called the custom operation `run`; the engine derives the
 # model-facing tool name from the operation name
 # (path_custom_tool_definition: ONE public tool per custom operation
-# name), and the pin test requires the tool to be `run_probe` — a bare
+# name), and the pin test requires the tool to be `path_run` — a bare
 # `run` tool would also be a needlessly generic name on the agent
-# surface. The operation is therefore named `run_probe`.
+# surface. The operation is therefore named `path_run`.
 #
 # share/probes/ is NOT one of LiveWorkflow's four draft subdirs
 # (tasks, helpers, entities, entity_properties — scout-gear
 # lib/scout/workflow/live.rb SHARE_SUBDIRS), so nothing auto-loads the
 # probes. Verified live in round 12, not assumed.
 #
-# TRUST BOUNDARY: the `run_probe` operation executes trusted,
+# TRUST BOUNDARY: the `path_run` operation executes trusted,
 # agent-authored Ruby in a fresh UNSANDBOXED child (the invoking user's
 # privileges). The `sandbox: true` kind flag governs which OPERATIONS the
 # agent may call, not how the custom operation executes — exactly the
-# run_test contract (README 'Trust boundaries').
+# test_file kind contract (README 'Trust boundaries').
 require 'fileutils'
 
 require_relative 'support'
@@ -50,7 +50,7 @@ module ScoutCoder
         'Unsandboxed ScoutCoder-only Ruby probe snippets for investigating the Scout framework ' \
         '(share/probes). Virtual paths are relative to the kind root: a bare name such as ' \
         'engine_probe, no .rb suffix and no physical prefix (share/probes/). Execution happens ' \
-        'ONLY through the run_probe tool; write/edit never auto-run. Probes are trusted code ' \
+        'ONLY through the path_run tool; write/edit never auto-run. Probes are trusted code ' \
         'executed with caller authority.',
 
       'extension' => 'rb',
@@ -65,7 +65,7 @@ module ScoutCoder
 
       # Generic CRUD from the engine (explicit for documentation value) +
       # validate. NO promote (one-root kind), NO smoke (validate is the
-      # static check; run_probe the executing check), NO patch, NO test.
+      # static check; path_run the executing check), NO patch, NO test.
       'capabilities' => {
         'read' => true, 'write' => true, 'edit' => true, 'list' => true,
         'move' => true, 'rename' => true, 'delete' => true,
@@ -113,36 +113,27 @@ module ScoutCoder
       end,
 
       # -----------------------------------------------------------------
-      # ONE custom operation: `run_probe`. The outcome-C channel — custom
+      # ONE custom operation: `path_run`. The outcome-C channel — custom
       # operations DO return their payload verbatim (a3 evidence), unlike
       # write/edit overrides. :full handler + authorization: :read, the
-      # exact run_test registration shape. When `source` is supplied the
+      # exact test_file-kind registration shape. When `source` is supplied the
       # implementation owns the write (handler-owns-the-write shape the
       # engine documents for custom operations): save first, syntax-check,
       # then execute, reporting saved/syntax/execution independently.
       # -----------------------------------------------------------------
       'operations' => {
-        'run_probe' => {
-          'description' =>
-            'Run one probe Ruby snippet in a fresh UNSANDBOXED child process ' \
-            '(trusted code, caller authority, ScoutCoder-only, for investigating the Scout ' \
-            'framework). The child preloads the owning checkout workflow.rb before loading ' \
-            'the probe. When source is given the probe is saved first (never reverted on ' \
-            'failure), syntax-checked, then executed; saved/syntax/execution are independent ' \
-            'outcomes. Not a sandbox boundary: expose only to agents that may already run ' \
-            'trusted Ruby in this checkout.',
-          'parameters' => {
-            'properties' => {
-              'timeout_seconds' => {'type' => 'integer',
-                                    'default' => ProbeSupport::PROBE_TIMEOUT,
-                                    'minimum' => ProbeSupport::MIN_TIMEOUT,
-                                    'maximum' => ProbeSupport::MAX_TIMEOUT,
-                                    'description' => "OPTIONAL probe timeout in seconds, #{ProbeSupport::MIN_TIMEOUT}..#{ProbeSupport::MAX_TIMEOUT} (default #{ProbeSupport::PROBE_TIMEOUT}). Out-of-range or non-integer values are rejected."},
-              'source' => {'type' => 'string',
-                           'description' => 'OPTIONAL complete probe source; when given the probe is written/overwritten, syntax-checked and executed in one call (create-and-run). A syntax failure leaves the source saved but unexecuted.'}
-            }
-          },
+        'path_run' => {
+          'description' => ScoutCoder::PATH_RUN_DESCRIPTION,
+          'parameters' => ScoutCoder::PATH_RUN_PARAMETERS,
           'implementation' => lambda do |agent, target, args|
+            # Union contract: scope belongs to kind=test_file. Reject it
+            # BEFORE any write or execution — silently ignoring it would
+            # let a caller believe a tree ran. (round-14 decision)
+            if args['scope']
+              raise ParameterException,
+                    'path_run (kind=probe): scope is not applicable to the probe kind ' \
+                    '(a probe is one snippet, never a tree); scope belongs to kind=test_file. '
+            end
             saved = Thread.current[:scoutcoder_probe_kind]
             begin
               Thread.current[:scoutcoder_probe_kind] = args['kind'] || saved

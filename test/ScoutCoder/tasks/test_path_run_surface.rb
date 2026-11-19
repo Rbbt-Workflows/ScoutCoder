@@ -1,16 +1,19 @@
 require 'test/unit'
 require 'fileutils'
 require 'json'
-require 'securerandom'
 require 'tmpdir'
 require File.expand_path('../../test_helper.rb', __dir__)
 
-# Round 9 (guide research/test-file-path-kind-guide.md §8 items 11-13 + the
-# run_test task): the aggregated `run_test` custom operation and the
-# ScoutCoder `run_test` task, exercised through the same TestFileSupport.
-# Runs against sandbox tmpdirs with the process CWD confined, so nothing
-# touches the real share/test or test/ScoutCoder trees.
-class TestTestRunnerTools < Test::Unit::TestCase
+# Round 9 origin; ROUND-14 REWRITE (path_run consolidation): the retired
+# test-runner task and its aggregated custom operation are gone, replaced
+# by ONE `path_run` tool shared by the test_file and probe kinds (union
+# contract {source, scope, timeout_seconds}, no declared defaults). This
+# file exercises the test_file half of that union through the real engine
+# tool wrapper installed on a confined agent, plus the union rejections
+# that must fire BEFORE any execution. Runs against sandbox tmpdirs with
+# the process CWD confined, so nothing touches the real share/test or
+# test/ScoutCoder trees.
+class TestPathRunSurface < Test::Unit::TestCase
   ROOT = File.expand_path('../../..', __dir__)
   PASS = <<~RUBY
     require 'test/unit'
@@ -26,7 +29,7 @@ class TestTestRunnerTools < Test::Unit::TestCase
   RUBY
 
   def setup
-    @sandbox = Dir.mktmpdir('r9-run-test')
+    @sandbox = Dir.mktmpdir('r14-path-run')
     @saved_cwd = Dir.pwd
     @before = snapshot_real
   end
@@ -47,17 +50,12 @@ class TestTestRunnerTools < Test::Unit::TestCase
     end
   end
 
-  def run_tool(path, scope, timeout: nil)
+  def run_tool(path, scope, timeout: nil, source: nil)
     args = { 'kind' => 'test_file', 'path' => path, 'scope' => scope, 'location' => 'tmp' }
     args['timeout_seconds'] = timeout if timeout
-    raw = @agent.other_options[:tools]['run_test'].first.call('run_test', args)
+    args['source'] = source if source
+    raw = @agent.other_options[:tools]['path_run'].first.call('path_run', args)
     Hash === raw ? raw : JSON.parse(raw)
-  end
-
-  def run_task(path, scope, timeout: nil)
-    args = { 'path' => path, 'scope' => scope, 'location' => 'tmp' }
-    args['timeout_seconds'] = timeout if timeout
-    ScoutCoder.job(:run_test, nil, args).run
   end
 
   def seed!
@@ -75,9 +73,9 @@ class TestTestRunnerTools < Test::Unit::TestCase
     FileUtils.mkdir_p(File.join(@sandbox, 'share', 'test', 'integration'))
   end
 
-  # ------------------------------------------------ item 11: file scope
+  # ------------------------------------------------ file scope
 
-  def test_run_test_file_scope_pass_and_fail
+  def test_path_run_file_scope_pass_and_fail
     confine!
     File.write(File.join(@sandbox, 'share', 'test', 'task', 'alpha.rb'), PASS)
     File.write(File.join(@sandbox, 'share', 'test', 'task', 'beta.rb'), FAIL)
@@ -98,13 +96,13 @@ class TestTestRunnerTools < Test::Unit::TestCase
     assert_match(/assert/, f['results'].first['stdout'].to_s)
   end
 
-  def test_run_test_file_scope_missing_target_is_parameter_exception
+  def test_path_run_file_scope_missing_target_is_parameter_exception
     confine!
     r = run_tool('task/nope', 'file')
     assert_match(/does not exist or is not a file/, r['exception'].to_s)
   end
 
-  def test_run_test_file_scope_timeout_override
+  def test_path_run_file_scope_timeout_override
     confine!
     File.write(File.join(@sandbox, 'share', 'test', 'task', 'slow.rb'),
                "require 'test/unit'\nclass Slow < Test::Unit::TestCase\n  def test_slow; sleep 30; end\nend\n")
@@ -113,9 +111,30 @@ class TestTestRunnerTools < Test::Unit::TestCase
     assert_equal true, r['results'].first['timed_out']
   end
 
-  # ----------------------------------------- item 12: directory scope
+  # omitted timeout_seconds reaches the runner as nil; the runner's own
+  # per-scope default applies (round-14 receipt-verified union contract).
+  def test_path_run_omitted_timeout_uses_runner_default
+    confine!
+    File.write(File.join(@sandbox, 'share', 'test', 'task', 'alpha.rb'), PASS)
+    r = run_tool('task/alpha', 'file')
+    assert_equal 1, r['count']
+    assert_equal 'file', r['scope']
+    assert_equal false, r['results'].first['timed_out'], 'default file timeout must still bound the child run'
+  end
 
-  def test_run_test_directory_scope_aggregates
+  # timeout bounds are enforced BEFORE any child process spawns.
+  def test_path_run_timeout_bounds_rejected_before_spawn
+    confine!
+    [0, -5, ScoutCoder::TestFileSupport::MAX_TIMEOUT + 1, 'soon'].each do |bad|
+      r = run_tool('task/none', 'file', timeout: bad)
+      assert r.key?('exception'), "bounds violation must fail: #{bad.inspect} -> #{r.inspect}"
+      assert_match(/timeout_seconds/, r['exception'].to_s)
+    end
+  end
+
+  # ---------------------------------------- directory scope
+
+  def test_path_run_directory_scope_aggregates
     seed!
     r = run_tool('task', 'directory')
     assert_equal 2, r['count']
@@ -125,9 +144,9 @@ class TestTestRunnerTools < Test::Unit::TestCase
     assert r['results'].all? { |x| x['ran'] }, 'both files must run and be reported'
   end
 
-  # --------------------------------------------- item 13: suite scope
+  # --------------------------------------------- suite scope
 
-  def test_run_test_suite_scope_discovers_both_sides_and_empty_is_error
+  def test_path_run_suite_scope_discovers_both_sides
     seed!
     proj = File.join(@sandbox, 'test', 'ScoutCoder', 'tasks')
     FileUtils.mkdir_p(proj)
@@ -141,40 +160,41 @@ class TestTestRunnerTools < Test::Unit::TestCase
                   'share/test/task/beta.rb', 'test/ScoutCoder/tasks/test_alpha.rb'], tails
   end
 
-  def test_run_test_suite_scope_empty_is_error
+  def test_path_run_suite_scope_empty_is_error
     confine!
     r = run_tool('.', 'suite')
     assert_match(/no test files found/, r['exception'].to_s)
   end
 
-  # ------------------------------------------------ the ScoutCoder task
+  # ------------------------------- union rejections (round 14)
 
-  def test_run_test_task_file_scope
+  # source belongs to kind=probe; test_file must reject it BEFORE any
+  # execution — an agent must never believe supplied source was tested.
+  def test_path_run_rejects_source_for_test_file_before_execution
     confine!
-    File.write(File.join(@sandbox, 'share', 'test', 'task', 'alpha.rb'), PASS)
-    r = run_task('task/alpha', 'file')
-    assert_equal 1, r['count']
-    assert_equal true, r['ok']
+    file = File.join(@sandbox, 'share', 'test', 'task', 'alpha.rb')
+    File.write(file, PASS)
+    r = run_tool('task/alpha', 'file', source: "puts 'INJECTED'")
+    assert_match(/source is not applicable to the test_file kind/, r['exception'].to_s)
+    refute File.read(file).include?('INJECTED'),
+           'the supplied source must never be written into the test file'
+    assert_equal PASS, File.read(file), 'the existing test file must be byte-identical'
   end
 
-  def test_run_test_task_directory_scope
-    seed!
-    r = run_task('task', 'directory')
-    assert_equal 2, r['count']
-    assert_equal false, r['ok']
-  end
-
-  def test_run_test_task_rejects_empty_discovery
+  # scope belongs to kind=test_file; probe must reject it before execution.
+  def test_path_run_rejects_scope_for_probe_before_execution
     confine!
-    error = assert_raise(ParameterException) { run_task('.', 'suite') }
-    assert_match(/no test files found/, error.message)
+    args = { 'kind' => 'probe', 'path' => 'never_runs', 'scope' => 'file',
+             'source' => "File.write(File.join(#{@sandbox.inspect}, 'canary'), 'RAN')" }
+    raw = @agent.other_options[:tools]['path_run'].first.call('path_run', args)
+    r = Hash === raw ? raw : JSON.parse(raw)
+    assert_match(/scope is not applicable to the probe kind/, r['exception'].to_s)
+    refute File.exist?(File.join(@sandbox, 'canary')),
+           'the probe must not execute when scope is supplied'
   end
 
-  def test_run_test_task_timeout_override
-    confine!
-    File.write(File.join(@sandbox, 'share', 'test', 'task', 'slow.rb'),
-               "require 'test/unit'\nclass Slow < Test::Unit::TestCase\n  def test_slow; sleep 30; end\nend\n")
-    r = run_task('task/slow', 'file', timeout: 1)
-    assert_equal 'timeout', r['results'].first['exit_class']
-  end
+  # Probe-half positive coverage (create-and-run, save/syntax/execute
+  # separation, source-retained-after-failure) lives in test_path_kinds.rb
+  # probe section, which drives the SAME path_run tool against a sandboxed
+  # probe-kind copy — nothing here may write into the real share/probes.
 end

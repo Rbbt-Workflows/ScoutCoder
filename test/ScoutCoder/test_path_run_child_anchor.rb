@@ -4,10 +4,10 @@ require 'fileutils'
 require 'tmpdir'
 
 # ---------------------------------------------------------------------------
-# Anchor contract for run_test children (round: path-kinds contract fixes;
+# Anchor contract for path_run children (round: path-kinds contract fixes;
 # discharges round-9 deferred item 8, "PATH_KIND_ROOT chdir tension").
 #
-# CONTRACT: a run_test child loads the workflow.rb of the project checkout
+# CONTRACT: a path_run child loads the workflow.rb of the project checkout
 # that OWNS the resolved test file.
 #
 # Foreign regime under test (the AGS session regime): the kinds and the
@@ -17,8 +17,8 @@ require 'tmpdir'
 # PATH_KIND_ROOT (structural) and loaded the wrong workflow.rb; evidence:
 # tmp/path-kinds-contract-fixes/logs/harness-red.log.
 #
-# Entry path is exactly the session's: run_test TASK surface ->
-# TestFileSupport.agent_standin -> run_for_agent -> run_child -> chdir.
+# Entry path is exactly the session's: path_run TASK surface ->
+# path-kind resolve -> run_for_agent -> run_child -> chdir.
 # The fixture is a disposable foreign checkout built at runtime under
 # Dir.mktmpdir (NOT tmp/path-kinds-contract-fixes/, which is disposable
 # probe material).
@@ -85,32 +85,28 @@ class TestRunTestChildAnchor < Test::Unit::TestCase
       class AnchorProbe < Test::Unit::TestCase
         def test_child_loaded_foreign_workflow
           assert_equal 'constant', defined?(#{FOREIGN_WORKFLOW}),
-            'run_test child did not load the foreign workflow.rb'
+            'path_run child did not load the foreign workflow.rb'
           assert_equal 'constant', defined?(#{FOREIGN_ENTITY}),
-            'run_test child did not load the foreign entity draft'
+            'path_run child did not load the foreign entity draft'
         end
       end
     RUBY
   end
 
-  # Entry path: the session chain agent_standin -> resolve_path ->
-  # run_for_agent -> run_child. The run_test TASK is a thin wrapper over
-  # exactly this call (tasks/test_runner_tools.rb); going through the task
-  # would add the Scout JOB layer, whose cache key does not include the
-  # runtime fixture path — a second run in another tmpdir would replay the
-  # FIRST run's result (stale workflow_loaded pointing at a deleted
-  # sandbox). Observed live during this bout; that is a caching property
-  # of the task surface, not of the anchor under test.
-  def run_test_entry(path)
-    agent = ScoutCoder::TestFileSupport.agent_standin
-    target = agent.resolve_path('test_file', path, 'tmp')
-    ScoutCoder::TestFileSupport.run_for_agent(agent, target, {'scope' => 'file'})
+  # Entry path: the session chain resolve_path -> run_for_agent ->
+  # run_child. (Round 14: the path_run TASK and TestFileSupport's
+  # agent_standin retired with the path_run consolidation; the entry now
+  # resolves through the production resolve hook directly. The TASK-layer
+  # caching caveat that motivated the standin is gone with the task.)
+  def path_run_entry(path)
+    target = ScoutCoder.path_kind_resolve_test_file(path, 'tmp')
+    ScoutCoder::TestFileSupport.run_for_agent(nil, target, {'scope' => 'file'})
   end
 
   # ------------------------------------------------------------------ tests
 
   def test_child_loads_foreign_workflow_when_working_from_foreign_checkout
-    result = run_test_entry('probe/anchor')
+    result = path_run_entry('probe/anchor')
 
     assert_equal 1, result['count'], 'exactly the probe file must run'
     r = result['results'].first

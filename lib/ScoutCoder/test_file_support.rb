@@ -1,10 +1,10 @@
-# Shared runner for the `test_file` path kind and the `run_test` ScoutCoder
+# Shared runner for the `test_file` path kind and the `path_run` ScoutCoder
 # task (round 9, research/test-file-path-kind-guide.md §5-§6).
 #
 # ONE runner, two entry surfaces:
-#   * the custom path operation `run_test` on the test_file kind
+#   * the custom path operation `path_run` on the test_file kind
 #     (operations table in path_kinds/test_file.rb), and
-#   * the ScoutCoder task `run_test` in tasks/test_runner_tools.rb.
+#   * the ScoutCoder task `path_run` in tasks/test_runner_tools.rb.
 #
 # Every file runs in a FRESH child process
 # (`RbConfig.ruby -I <checkout>/lib -e LOADER <file>`, chdir: the checkout
@@ -58,18 +58,6 @@ module ScoutCoder
     SUMMARY_RE = /(\d+)\s+tests?,\s*(\d+)\s+assertions?,\s*(\d+)\s+failures?,\s*(\d+)\s+errors?/
 
     class << self
-      # A minimal agent stand-in exposing exactly resolve_path for the
-      # test_file kind, so the workflow task can drive the same dispatch
-      # path the engine uses without a live LLM agent.
-      def agent_standin
-        agent = Object.new
-        agent.define_singleton_method(:resolve_path) do |kind, path, location|
-          raise ParameterException, "Unknown path kind: #{kind}" unless kind.to_s == 'test_file'
-          ScoutCoder.path_kind_resolve_test_file(path, location)
-        end
-        agent
-      end
-
       # Run ONE test file in a fresh child process. `file` is an absolute
       # path inside the current checkout. Returns a result hash with the
       # four guide §4 exit classes:
@@ -264,7 +252,7 @@ module ScoutCoder
         File.dirname(file)
       end
 
-      # Entry for the run_test surfaces: resolves the target through the
+      # Entry for the path_run surfaces: resolves the target through the
       # agent's test_file kind, then dispatches on scope.
       #
       #   scope=file      -> target must exist and be a file (DEFAULT when
@@ -301,15 +289,15 @@ module ScoutCoder
         case scope
         when 'file'
           unless File.file?(target.to_s)
-            raise ParameterException, "run_test: test_file at '#{target}' does not exist or is not a file"
+            raise ParameterException, "path_run: test_file at '#{target}' does not exist or is not a file"
           end
           wrap_result(scope, [run_file(target.to_s, timeout_seconds: timeout || FILE_TIMEOUT)], target)
         when 'directory'
           unless File.directory?(target.to_s)
-            raise ParameterException, "run_test: '#{target}' is not a directory"
+            raise ParameterException, "path_run: '#{target}' is not a directory"
           end
           files = discover(target.to_s)
-          raise ParameterException, "run_test: no test files found under #{target}" if files.empty?
+          raise ParameterException, "path_run: no test files found under #{target}" if files.empty?
           wrap_result(scope, files.collect { |f| run_file(f, timeout_seconds: timeout || DIRECTORY_TIMEOUT) }, target)
         when 'suite'
           # Round-11 conformance: the engine now authorizes the primary
@@ -324,11 +312,19 @@ module ScoutCoder
           # selector ('.' -> '<root>/.rb'), so recover the actual directory:
           # the resolved target itself when it IS a directory, else its
           # dirname with a trailing extension stripped.
-          tmp_root = if File.directory?(target.to_s)
-                       target.to_s
-                     else
-                       File.dirname(target.to_s).sub(/\.rb\z/, '')
-                     end
+          # Round-14 fix (found running the production suite in a checkout
+          # without share/test drafts): resolve('.') may return the tmp root
+          # itself; when that directory does not exist the old dirname()
+          # fallback enumerated the PARENT (share/), sweeping unrelated
+          # trees (share/probes) into the suite. Recover a root ONLY when it
+          # is actually a directory; a nonexistent tmp location simply
+          # contributes no files.
+          t = target.to_s
+          # Identity is directory-independent (a checkout without share/test
+          # drafts is still the production registration); ENUMERATION of the
+          # tmp side additionally requires the directory to exist.
+          identity_root = File.directory?(t) ? t : t.sub(/\.rb\z/, '')
+          tmp_root = File.directory?(identity_root) ? identity_root : nil
           # Project root: the DISPATCHED kind's own project root when the
           # target's tmp root differs from the production 'test_file' tmp
           # root (probe copies, foreign incorporations — enumerating the
@@ -341,7 +337,7 @@ module ScoutCoder
             nil
           end
           proj_root =
-            if prod_tmp && File.expand_path(tmp_root) == File.expand_path(prod_tmp)
+            if prod_tmp && File.expand_path(identity_root) == File.expand_path(prod_tmp)
               begin
                 agent.resolve_path('test_file', '.', 'project').to_s
               rescue StandardError
@@ -366,20 +362,20 @@ module ScoutCoder
             end
           roots << py_root if py_root && File.directory?(py_root)
           roots = roots.uniq
-          raise ParameterException, 'run_test: no test directories found for suite scope' if roots.empty?
+          raise ParameterException, 'path_run: no test directories found for suite scope' if roots.empty?
 
           files = roots.flat_map { |r| discover(r) }.sort.uniq
-          raise ParameterException, 'run_test: no test files found for suite scope' if files.empty?
+          raise ParameterException, 'path_run: no test files found for suite scope' if files.empty?
 
           wrap_result(scope, files.collect { |f| run_file(f, timeout_seconds: timeout || SUITE_TIMEOUT) }, target)
         else
-          raise ParameterException, "run_test: unknown scope #{scope.inspect} (file, directory or suite)"
+          raise ParameterException, "path_run: unknown scope #{scope.inspect} (file, directory or suite)"
         end
       end
 
       private
 
-      # Aggregate one per-file result list into the run_test return shape.
+      # Aggregate one per-file result list into the path_run return shape.
       def wrap_result(scope, results, target)
         passed = results.count { |r| r['passed'] }
         failed = results.count { |r| !r['passed'] && r['ran'] }

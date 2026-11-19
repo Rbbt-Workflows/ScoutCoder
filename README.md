@@ -2,7 +2,7 @@ ScoutCoder: coding agent for the Scout stack — documentation discovery and wor
 
 ScoutCoder is an AI-assisted Scout workflow for retrieving framework
 documentation and developing Scout workflows over a local repository
-checkout, with 18 registered tasks of its own, all of them agent-exposed
+checkout, with 16 registered tasks of its own, all of them agent-exposed
 through `LLM.workflow_tools`. The workflow being developed
 or explored is the one defined by the `workflow.rb` file in the current
 process directory (`PWD`), treated as the repository root; ScoutCoder
@@ -19,8 +19,10 @@ Its capabilities fall into two groups:
 2. **Workflow development and inspection** — author tasks, entities and
    entity properties as drafts through the agent path kinds (`task`,
    `entity`, `entity_property`, `python_task`, `test_file`, `probe`);
-   validate, test and probe them in fresh processes (`run_test`,
-   `run_probe`); execute tasks from installed workflows (`run_task`); and
+   validate them (`path_validate`, `path_smoke`), run their tests and
+   probes in fresh processes through the single `path_run` operation
+   (`kind: "test_file"` for test files, `kind: "probe"` for probes);
+   execute tasks from installed workflows (`run_task`); and
    inspect or document the resulting jobs (`job_info`, `job_status`,
    `document_task`, `reload_workflow`, `list_tasks`, `task_inputs`,
    `task_dependencies`, `task_code`, `list_entities`).
@@ -44,8 +46,8 @@ Usage detail for agents:
   [Tool selection](doc/user/ToolSelection.md).
 - Authoring entities, properties and Python tasks:
   [Authoring entities](doc/user/AuthoringEntities.md).
-- The six path kinds — virtual paths, validate, paired tests, run_test,
-  run_probe, promote, wiring after promotion:
+- The six path kinds — virtual paths, validate, smoke, paired tests,
+  `path_run` (tests and probes), promote, wiring after promotion:
   [Path kinds guide](doc/user/PathKinds.md).
 - Testing and execution — choosing a runner, running a task directly:
   [Testing](doc/user/Testing.md).
@@ -64,6 +66,37 @@ entities/properties/Python tasks), `scoutcoder-path-kinds-lifecycle`
 (operational author→validate→test→probe→promote loop),
 `scoutcoder-repo-documentation` (writing and reviewing README, `doc/`
 and `research/` material, agent-facing overrides and skills folders).
+
+## Running tests and probes: `path_run`
+
+`path_run` is the single agent operation that executes the two runnable
+path kinds, each in a fresh process that preloads the owning checkout's
+`workflow.rb`:
+
+- `kind: "test_file"` runs Scout test files — one file (`scope: "file"`),
+  every file under a path prefix (`scope: "directory"`) or the whole suite
+  (`scope: "suite"`), with per-file exit classification and counts.
+- `kind: "probe"` runs one probe Ruby snippet unsandboxed with the
+  caller's authority; with `source` it writes, syntax-checks and executes
+  the probe in one call (create-and-run), and without `source` it
+  re-executes the saved probe.
+
+`source` applies only to `kind: "probe"` and `scope` only to
+`kind: "test_file"`; an option that does not apply to the addressed kind
+is rejected before anything executes. `timeout_seconds` is optional
+(1..3600; the runner's own default applies when omitted). `path_run` is
+an agent path-kind operation, not a registered workflow task — its `kind`
+enum lists exactly the runnable kinds registered for the agent. One-line
+example (the full set of copyable examples lives in the
+[Path kinds guide](doc/user/PathKinds.md) § `path_run`):
+
+```
+path_run(kind: "probe", path: "hello_probe", source: "puts 'hello'")
+```
+
+Both kinds execute trusted code UNSANDBOXED with the caller's authority
+(trust statement: [Path kinds guide](doc/user/PathKinds.md)
+§ Trust boundaries).
 
 ## See also (verified pointers)
 
@@ -109,38 +142,6 @@ Inputs: `workflow` and `task`. Reports static dependency declarations
 separately from dynamic dependency blocks; a dynamic block's presence does
 not enumerate the full dependency list, and the output marks the list as
 incomplete when applicable.
-
-## run_test
-Run test files through the `test_file` path kind
-
-Inputs: `path` (the `test_file` virtual path; `.` for the whole suite),
-`scope` (`file`, `directory` or `suite`; default `file`), optional
-`location` (`tmp`, `project` or `python`) and optional `timeout_seconds`.
-Each selected file runs in its own fresh process — Ruby test files load the
-owning checkout's `workflow.rb` first; Python files run under
-`python3 -m unittest` — with per-file exit classification, test/assertion
-counts, captured output and separate `passed`/`ran` fields; zero discovered
-files is an error, not a passing empty suite.
-**Execution is unsandboxed: the child process runs trusted test code with
-the caller's authority.** Inputs, exit-code mapping and the anchor contract:
-[Testing](doc/user/Testing.md) and [Path kinds guide](doc/user/PathKinds.md)
-(run_test section); internals in [Testing internals](doc/developer/Testing.md).
-Persistent Scout job caches are not cleared automatically.
-
-## run_probe
-Run one probe through the `probe` path kind
-
-Inputs: `path` (the bare probe name; single-probe scope only), optional
-`source` (complete probe Ruby source; when given, the probe is written,
-syntax-checked and executed in one call) and optional `timeout_seconds`.
-The result reports saved/syntax/execution as independent outcomes; a
-runtime failure never deletes the saved source, and a syntax failure skips
-execution entirely. **Execution is unsandboxed: the fresh child runs
-trusted Ruby with the caller's authority, deliberately outside Workspace
-sandbox grants** — reserve probes for Scout-framework investigations.
-Create-and-run semantics and full mechanics:
-[Path kinds guide](doc/user/PathKinds.md) (run_probe section) and
-[Testing internals](doc/developer/Testing.md).
 
 ## document_task
 Add or replace a task entry in the <workflow> README.md Tasks section
@@ -235,6 +236,7 @@ List the workflows installed and available to ScoutCoder
 Takes no inputs. Unions `Workflow.installed_workflows` (a purely local scan of the `workflows` pathmap, never triggering network autoinstall) with the workflow modules already loaded in the process, deduplicated and sorted; the local scan is wrapped so the task never crashes. The discovery step for workflow names: every returned name is usable as the `repo` input of the documentation lookup tasks.
 
 ## reload_workflow
+Update a workflow to load any promoted elements (e.g. tasks or entities)
 
 Inputs: optional `root` (a workflow checkout — a directory containing
 `workflow.rb`; defaults to the ScoutCoder checkout, since its own lib/ edits
@@ -243,10 +245,18 @@ realpathed root (cached entrypoint included) and re-evaluates `workflow.rb`
 so `require_relative` lines re-fire — lib edits and promotions take effect
 immediately; features outside the root are never purged, and errors are
 loud. Returns a report (`ok`, `root`, `entrypoint`, `purged`, `workflow`,
-`reload`). A directory `root` digests by file listing, so the same root
-replays its cached report — pass `clean: true` when the reload itself must
-run fresh. This is the explicit reload surface for lib-location edits (the
-no-autorun contract forbids automatic triggering); promotions fire the same
-reload automatically through the `promotion_post_move` hook. Reload
-internals: [LiveWorkflow and WorkflowReload](doc/developer/LiveWorkflow.md).
+`reload`). `clean` is not an input of this tool — it belongs to `run_task`
+(`run_task` with `clean: true` recomputes the addressed job and is the
+documented way to force a fresh execution: without `clean`, a job —
+default-root or explicit-root — replays a cached execution when one
+exists).
+This is the explicit reload surface for lib-location edits (the
+no-autorun contract forbids automatic triggering). Promotions reload
+immediately by default through the `promotion_post_move` hook, and their
+result reports `promotion_status` (`succeeded`, `reload_failed` — the
+completed move plus the original diagnostic — or `deferred`); related
+promotions (e.g. an entity, then its properties) may instead pass the
+caller argument `defer_reload` and fire exactly one explicit reload after
+wiring. Reload internals:
+[LiveWorkflow and WorkflowReload](doc/developer/LiveWorkflow.md).
 

@@ -54,37 +54,115 @@ module ScoutCoder
     # receives (agent, path, location, args) where args carries
     # 'promotion_target' (absolute destination path), 'promotion_source_target'
     # and 'overwrite', and its return value is merged into the promote
-    # result under 'post_move'. A raised exception is reported as the
-    # promote result's 'exception' but the MOVE STANDS (the engine never
-    # rolls back a completed move); a refused promote never invokes the
-    # hook. The hook is never the writer: it purges and reloads ONLY.
+    # result with the ENGINE keys winning on collision (path.rb:1732
+    # `hook_result.merge(result)`), so this hook can add status keys but
+    # can never falsify promoted/destination/promotion_target.
+    #
+    # POST-MOVE REPORT, NEVER A RAISE (reload-deferral change): the move
+    # is already complete when the hook runs (the engine never rolls back
+    # a completed move), so a raise after the move leaves the caller with
+    # only a serialized exception envelope and NO destination/status —
+    # exactly the field failure this hook now repairs. The hook therefore
+    # RETURNS a report for every post-move outcome and raises ONLY when
+    # it cannot construct a report at all (no promotion_target to anchor
+    # on). reload_workflow! keeps normalizing internal failures to Scout
+    # ParameterException, so nothing raw escapes the tool wrapper either
+    # way.
+    #
+    # RESULT KEYS ADDED BY THIS HOOK (merged under the engine's
+    # promoted/destination/promotion_target/promotion_source_target):
+    #   'promotion_status' => 'succeeded' | 'deferred' | 'reload_failed'
+    #   'post_move'        => 'workflow_reload' | 'workflow_reload_deferred'
+    #   'reload'           => {'ok' => true, 'root', 'purged', 'mode'}
+    #                        | {'ok' => false, 'error' => <original
+    #                           diagnostic verbatim>, 'root' => <root
+    #                           attempted, present only when one was
+    #                           derivable — absent for a checkout-root
+    #                           discovery failure>}
+    #   'deferred_reload'  => the root to reload later (present only when
+    #                         defer_reload was set)
+    #
+    # 'purged' is the COUNT of purged feature entries (the full list and
+    # 'entrypoint' stay in reload_workflow!'s own report; the promote
+    # receipt intentionally carries the compact form).
+    #
+    # DEFERRAL CHANNEL (ScoutCoder-only caller argument, zero engine
+    # change): the engine merges caller keys into hook args verbatim and
+    # validates nothing (verified live, path.rb:1725-1731), so
+    # `defer_reload: true` on path_promote reaches the hook as
+    # args['defer_reload']. The engine's path_promote tool schema declares
+    # the flag (boolean, omittable, additionalProperties stays false), so
+    # model-facing callers can emit it as well as programmatic ones.
+    # Related promotions (new entity, then its
+    # properties) defer every intermediate reload and issue exactly one
+    # explicit reload afterwards, avoiding the reload of a
+    # half-promoted set (the field failure: promoting the entity, the
+    # automatic reload then evaluating the still-drafted property file
+    # against an entity not yet supplying `property`). The boolean flag is truthy for true and the strings
+    # 'true'/'t'/'yes'/'on' (case-insensitive); anything else is false.
     #
     # Root derivation: from args['promotion_target'] — walk up until a
     # directory containing workflow.rb (the promoted lib file sits under
-    # <root>/lib/..., so the climb is short and deterministic). Fail LOUDLY
-    # (ParameterException) if no checkout root is derivable; never skip
-    # silently. One shared lambda: every promoting kind registers the SAME
+    # <root>/lib/..., so the climb is short and deterministic). When the
+    # climb finds NO workflow.rb the hook RETURNS 'reload_failed' with the
+    # climb diagnostic in reload.error and no 'root' key (a fourth status is
+    # deliberately not introduced: with the destination known, a caller's
+    # recovery action — inspect/repair the destination, retry nothing — is
+    # the same whether the reload failed in discovery or execution, and the
+    # verbatim diagnostic carries the distinction). The ONLY raise left is
+    # the missing-promotion_target arm: with no anchor there is no report to
+    # construct. One shared lambda: every promoting kind registers the SAME
     # object, so the reload behavior is defined once here.
     PROMOTION_POST_MOVE = lambda do |_agent, _path, _location, args|
-      target = args['promotion_target'] || args[:promotion_target]
+      raw = args['promotion_target'] || args[:promotion_target]
       raise ParameterException,
-            'workflow reload after promote: no promotion_target in args' unless target
+            'workflow reload after promote: no promotion_target in args' unless raw
 
-      dir = File.dirname(File.expand_path(target.to_s))
+      target = raw.to_s
+      dir = File.dirname(File.expand_path(target))
       root = nil
+      climb_error = nil
       loop do
         break if File.file?(File.join(dir, 'workflow.rb')) && (root = dir)
         parent = File.dirname(dir)
-        raise ParameterException,
-              "workflow reload after promote: no workflow.rb found above #{target} " \
-              '(promoted outside any workflow checkout?)' if parent == dir
+        if parent == dir
+          # Checkout-root discovery failure: the destination IS known (the
+          # engine passes promotion_target and merges its own promoted/
+          # destination keys over any returned hash), so the caller must
+          # still receive the completed-move receipt — report, never raise.
+          climb_error = "workflow reload after promote: no workflow.rb found " \
+                        "above #{target} (promoted outside any workflow checkout?)"
+          break
+        end
         dir = parent
       end
 
-      report = WorkflowReload.reload_workflow!(root: root)
-      {'post_move' => 'workflow_reload',
-       'reload' => {'ok' => report['ok'], 'root' => report['root'],
-                    'purged' => report['purged'].size, 'mode' => report['reload']}}
+      defer_flag = args['defer_reload'] || args[:defer_reload]
+      defer = [true, 'true', 't', 'yes', 'on'].include?(defer_flag.is_a?(String) ? defer_flag.downcase : defer_flag)
+      return {'promotion_status' => 'deferred',
+              'post_move' => 'workflow_reload_deferred',
+              'reload' => {'ok' => false, 'deferred' => true},
+              'deferred_reload' => root} if defer
+
+      return {'promotion_status' => 'reload_failed',
+              'post_move' => 'workflow_reload',
+              'reload' => {'ok' => false, 'error' => climb_error}} if climb_error
+
+      begin
+        report = WorkflowReload.reload_workflow!(root: root)
+        {'promotion_status' => 'succeeded',
+         'post_move' => 'workflow_reload',
+         'reload' => {'ok' => report['ok'], 'root' => report['root'],
+                      'purged' => report['purged'].size, 'mode' => report['reload']}}
+      rescue ParameterException => e
+        # Post-move failure: the move is already complete; report it in
+        # the result with the original diagnostic VERBATIM (the full
+        # normalized message reload_workflow! produced) instead of the
+        # bare exception envelope a raise would leave behind.
+        {'promotion_status' => 'reload_failed',
+         'post_move' => 'workflow_reload',
+         'reload' => {'ok' => false, 'error' => e.message, 'root' => root}}
+      end
     end.freeze
 
     class << self
@@ -157,7 +235,7 @@ module ScoutCoder
          'reload' => reload_mode}
       rescue ParameterException
         raise
-      rescue StandardError => e
+      rescue StandardError, ScriptError => e
         # Never leak a raw exception through the callers this will hang off
         # (engine hooks surface non-Scout failures poorly — round-12
         # surprise 3); a reload failure is a parameter-class error.

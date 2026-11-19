@@ -152,8 +152,23 @@ module ScoutCoder
       'smoke' => lambda do |agent, path, location, args|
         resolve_kind = args['kind'] || 'python_task'
         target = agent.resolve_path(resolve_kind, path, location)
-        root_dir = agent.path_kind_definition(resolve_kind).fetch('project_root', nil) ||
-                   File.expand_path('../../../..', agent.path_kind_definition(resolve_kind).fetch('roots').fetch('project').to_s)
+        # Fresh-process CWD: the checkout OWNING the resolved draft, per the
+        # shared anchor contract ScoutCoder.child_checkout (explicit
+        # project_root on the kind definition first, then the
+        # PATH_KIND_PROJECT_ROOT override, then a workflow.rb marker climb
+        # from the resolved draft, then the pinned foreign project root,
+        # then the structural PATH_KIND_ROOT). The pre-fix fixed-depth
+        # '../../../..' climb from roots['project'] assumed the
+        # ScoutCoder-shaped <checkout>/python/tasks layout; for a
+        # python_task draft in a nested foreign checkout (e.g. a
+        # <job>.files/sandbox/... tree, as in the FitAgent BioModelAgent
+        # run 861cdf355560e55c36219ac90543e952) it landed ABOVE the
+        # checkout and the child failed at stage=load with
+        # 'Workflow ./workflow.rb not found'.
+        definition = agent.path_kind_definition(resolve_kind)
+        pinned = definition['roots'].is_a?(Hash) ? definition['roots']['project'] : nil
+        root_dir = definition.fetch('project_root', nil) ||
+                   ScoutCoder.child_checkout(file: target, pinned_root: pinned)
         name = File.basename(path.to_s, '.py')
 
         unless File.file?(target.to_s)

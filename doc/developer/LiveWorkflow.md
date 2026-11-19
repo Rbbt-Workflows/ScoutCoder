@@ -72,6 +72,12 @@ workflow-level reload, `ScoutCoder::WorkflowReload.reload_workflow!(root:)`
   without it each reload would append a duplicate; the immediate
   re-registration restores membership, and no output difference was
   observed either way.
+- Failure normalization: `reload_workflow!` rescues `StandardError` AND
+  `ScriptError` and re-raises both as Scout `ParameterException` with the
+  original message verbatim. The `ScriptError` arm matters in practice: a
+  `SyntaxError` raised while re-evaluating a broken `workflow.rb` is a
+  `ScriptError`, not a `StandardError`, and previously escaped the
+  normalization raw.
 
 Hand-authored task and helper draft files loaded by `LiveWorkflow` must wrap
 declarations in the target workflow module (`module MyWorkflow ... end`),

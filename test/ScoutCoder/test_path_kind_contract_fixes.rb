@@ -165,18 +165,26 @@ class TestPathKindContractFixes < Test::Unit::TestCase
                    '<entity>/<property>'
   end
 
-  def test_run_test_task_desc_carries_grammar
-    desc = ScoutCoder.tasks[:run_test].description.to_s
+  # (round-14 path_run consolidation: the retired test-runner task is gone; the
+  # union description now carries the grammar for the shared tool.)
+  def test_path_run_task_desc_carries_grammar
+    desc = ScoutCoder.path_kind_test_file_definition['operations']['path_run']['description'].to_s
     assert_include desc, 'tier-prefixed'
     assert_include desc, 'no .rb suffix'
     assert_include desc, 'project checkout that owns the test file'
   end
 
-  def test_run_test_custom_op_description_carries_grammar_and_anchor
-    d = ScoutCoder.path_kind_test_file_definition['operations']['run_test']['description'].to_s
-    assert_include d, 'relative to the test_file kind root'
+  def test_path_run_custom_op_description_carries_grammar_and_anchor
+    d = ScoutCoder.path_kind_test_file_definition['operations']['path_run']['description'].to_s
+    assert_include d, 'tier-prefixed'
     assert_include d, 'no .rb suffix'
-    assert_include d, 'owns the test file'
+    assert_include d, 'project checkout that owns the test file'
+    # union contract facts (round-14 decision-record)
+    assert_include d, 'kind=probe'
+    assert_equal false, d.include?('default file'), 'no declared defaults in the union schema' # round-14: refute_include unavailable here
+    props = ScoutCoder.path_kind_test_file_definition['operations']['path_run']['parameters']['properties']
+    assert_equal %w[scope source timeout_seconds], props.keys.sort
+    refute props.values.any? { |v| v.key?('default') }, 'union schema declares no defaults'
   end
 
   # ------------------------------------------------------------ fix 6 tests

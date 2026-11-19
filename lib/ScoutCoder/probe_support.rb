@@ -1,11 +1,10 @@
-# Shared runner for the `probe` path kind and the `run_probe` ScoutCoder
+# Shared runner for the `probe` path kind's `path_run` custom operation
 # task (round 12, from the outcome-C engine-contract investigation —
 # tmp/notes/round12-engine-contract.md).
 #
 # ONE runner, two entry surfaces (mirroring TestFileSupport):
 #   * the custom path operation `run` on the probe kind
 #     (operations table in lib/ScoutCoder/path_kinds/probe.rb)
-#   * the ScoutCoder task `run_probe` (lib/ScoutCoder/tasks/probe_tools.rb)
 #
 # CONTRACT: unsandboxed execution of TRUSTED code. A probe is a Ruby
 # snippet for investigating the Scout framework itself; the fresh child
@@ -46,21 +45,6 @@ module ScoutCoder
     MAX_TIMEOUT = 3600
 
     class << self
-      # A minimal agent stand-in exposing exactly resolve_path for the
-      # probe kind, so the workflow task can drive the same dispatch path
-      # the engine uses without a live LLM agent (the TestFileSupport
-      # precedent).
-      def agent_standin
-        agent = Object.new
-        agent.define_singleton_method(:resolve_path) do |kind, path, location|
-          raise ParameterException, "Unknown path kind: #{kind}" unless kind.to_s == 'probe'
-          root = Scout.share.probes
-          root = Path.setup(root.to_s) unless Path === root
-          Path.setup(File.join(root.find(:current).to_s, path.to_s)).set_extension('rb')
-        end
-        agent
-      end
-
       # ------------------------------------------------------------------
       # Entry for both surfaces: run one probe file.
       #
@@ -131,7 +115,7 @@ module ScoutCoder
         # Failure normalization: a runner-side infrastructure error is a
         # Scout parameter error, never a raw exception through the tool
         # wrapper (round-12 surprise 3).
-        raise ParameterException, "run_probe failed: #{e.class}: #{e.message}"
+        raise ParameterException, "path_run failed: #{e.class}: #{e.message}"
       end
 
       # Syntax gate: AST-only parse, never executes. Returns the message
@@ -266,7 +250,7 @@ module ScoutCoder
       rescue ParameterException
         raise
       rescue StandardError => e
-        raise ParameterException, "run_probe failed: #{e.class}: #{e.message}"
+        raise ParameterException, "path_run failed: #{e.class}: #{e.message}"
       end
 
       private

@@ -5,10 +5,10 @@ Choose the runner by what you are trying to establish:
 - Use `path_validate` to check a virtual resource's static shape and syntax.
 - Use `path_smoke` on `task`, `entity`, `entity_property`, or `python_task`
   to verify initialization/registration without executing domain behavior.
-- Use `run_test` for a test file managed by the `test_file` kind, including
-  directory or suite scopes.
-- Use `run_probe` for an unsandboxed one-off Scout-framework investigation
-  snippet managed by the `probe` kind.
+- Use `path_run` with `kind: "test_file"` for a test file managed by the
+  `test_file` kind, including directory or suite scopes.
+- Use `path_run` with `kind: "probe"` for an unsandboxed one-off
+  Scout-framework investigation snippet managed by the `probe` kind.
 - Use `run_task` to exercise a workflow task directly through the normal
   Scout job system. It is a behavior probe, not a substitute for an
   assertion-based test.
@@ -27,9 +27,10 @@ is:
    `python_task/my_task` (at `location: python`). Do not include the
    physical `share/test/`, `test/<workflow>/` or `python/test/` roots, or a
    `.rb`/`.py` suffix, in the virtual path.
-3. Run the test with `run_test` at `scope: file`. Widen to `directory` or
-   `suite` only when a broader check is useful. A zero-file discovery is an
-   error, not a passing empty suite.
+3. Run the test with `path_run` (`kind: "test_file"`) at
+   `scope: "file"`. Widen to `directory` or `suite` only when a broader
+   check is useful. A zero-file discovery is an error, not a passing
+   empty suite.
 4. For source kinds, separately use `path_smoke` when load/registration
    needs verification. A passing smoke check does not prove behavior.
 5. If the source and test should be permanent, promote each resource
@@ -41,8 +42,8 @@ is:
 The paired-test tier conventions (`share/test/task/<name>.rb` on the tmp
 side, `test/<workflow>/tasks/test_<file>.rb` for shipped task code under
 `lib/<workflow>/tasks/`) remain the naming rule for a task's test; the
-`test_file` kind and `run_test` are the authoring and execution surface for
-both sides.
+`test_file` kind and `path_run` (`kind: "test_file"`) are the authoring and
+execution surface for both sides.
 
 A test file for the generic runner uses the Test::Unit shape:
 
@@ -68,17 +69,18 @@ class TestMyTask(unittest.TestCase):
         self.assertEqual(2, 1 + 1)
 ```
 
-`run_test` dispatches on the file extension: `.rb` files run as Ruby
+`path_run` (`kind: "test_file"`) dispatches on the file extension: `.rb`
+files run as Ruby
 Test::Unit (fresh Ruby process loading the owning checkout's
 `workflow.rb`), `.py` files as Python unittest (`python3 -m unittest`,
 `PYTHONPATH` from `ScoutPython.paths`, no `__pycache__`). Exit-code
 semantics: Python 0 → `clean_pass`, 1 → `assertion_failure`, 5
 (`NO TESTS RAN`) or zero discovered tests → `load_error`; `passed` and
-`ran` stay separate booleans for both languages. `run_test` mechanics
+`ran` stay separate booleans for both languages. `path_run` (`kind: "test_file"`) mechanics
 (fresh per-file process, anchor contract, exit classification, `passed` vs
 `ran`) are documented once in
-[doc/developer/Testing.md](../developer/Testing.md) and the `## run_test`
-task entry. Both specialized and general test runners start fresh
+[doc/developer/Testing.md](../developer/Testing.md) and the
+[Path kinds guide](PathKinds.md) § `path_run`. Both specialized and general test runners start fresh
 processes, but Scout job/Step results are persistent and are not
 automatically cleared; see [Fresh process versus fresh
 result](ToolSelection.md#fresh-process-versus-fresh-result).
@@ -92,7 +94,7 @@ build/test/packaging story, not a general conventions reference).
 
 ## Understand execution and sandbox boundaries
 
-Path Engine authorization is not a process sandbox, and `run_test`
+Path Engine authorization is not a process sandbox, and `path_run`
 intentionally executes trusted test code unsandboxed; the canonical
 statement is [Trust boundaries](PathKinds.md#trust-boundaries), with
 engine-level semantics in scout-ai `doc/developer/Sandbox.md` § "1. Is
@@ -108,7 +110,8 @@ establishes that. `run_task` returns whether a result was replayed; pass
 
 The distinction can avoid misleading sandbox-related failures: a test that
 needs ordinary workflow loading or runtime behavior should be run by
-`run_test` or a normal workflow job by `run_task`, rather than being
+`path_run` (`kind: "test_file"`) or a normal workflow job by `run_task`,
+rather than being
 coupled to Path Engine read/write operations. Timeouts and output capture
 are operational controls, not process isolation. Only execute trusted code
 and pass explicit inputs.

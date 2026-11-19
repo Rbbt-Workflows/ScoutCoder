@@ -26,11 +26,12 @@ filesystems an agent operates with the generic `path_*` tools: the
 `path_kinds` listing tool plus one tool per operation — `path_read`,
 `path_write`, `path_edit`, `path_list`, `path_move`, `path_rename`,
 `path_delete`, `path_validate`, `path_smoke` and `path_promote` — with no
-per-kind tool fan-out, plus the two custom operations installed as their
-own tools: the `test_file`-kind `run_test` and the `probe`-kind
-`run_probe`. ScoutCoder does not register a `test` capability or handler;
-explicit test execution is provided by `run_test`. `path_patch` is not
-offered for any kind.
+per-kind tool fan-out, plus ONE shared custom operation installed as its
+own tool: `path_run`, registered by both runnable kinds (`probe`,
+`test_file`) under a union contract (§ Shared custom operation, below).
+ScoutCoder does not register a `test` capability or handler; explicit
+test execution is provided by `path_run` with `kind: "test_file"`.
+`path_patch` is not offered for any kind.
 
 Which kinds an agent receives is decided by the `path_kind:` chat role, not
 by tool lines: an explicit `path_kind: ScoutCoder` line loads all six kinds,
@@ -46,20 +47,22 @@ distinction. It is slated for removal, but its removal patch may still be
 unapplied in the engine checkout: if a legacy `path_test` tool remains
 visible, do not use or depend on it, and do not register a kind-level `test`
 handler. ScoutCoder's supported design manages test files as `test_file`
-resources and executes them explicitly through `run_test`.
+resources and executes them explicitly through `path_run`.
 
 ## Capability matrix
 
 Capabilities are NOT identical across the six kinds: the four SOURCE kinds
 (`task`, `entity`, `entity_property`, `python_task`) offer validate + smoke
 + promote; `test_file` offers validate + promote and **no smoke** (round-10
-decision); `probe` offers validate (syntax only) and a single custom
-operation, `run` — no smoke, no promote, no second location. For
-`test_file`, `validate` is the static check and `run_test` is the executing
-check — `run_test` reports `passed` and the exit status separately, so the
-old "ran OK even if the tests failed" smoke verdict was redundant and was
-removed. For `probe`, `validate` is a pure AST parse that never executes the
-file; `run_probe` is the only executing surface.
+decision); `probe` offers validate (syntax only). Both kinds register the
+SAME custom operation `path_run` (the round-12 sketch of two separate
+per-kind runner tools was superseded in round 14) — no smoke, no
+promote, no second location on the probe side. For `test_file`, `validate`
+is the static check and `path_run` is the executing check — it reports
+`passed` and the exit status separately, so the old "ran OK even if the
+tests failed" smoke verdict was redundant and was removed. For `probe`,
+`validate` is a pure AST parse that never executes the file; `path_run`
+with `kind: "probe"` is the only executing surface.
 
 `path_read`, `path_write`, `path_edit`, `path_list`, `path_move`,
 `path_rename` and `path_delete` behave as an exact filesystem view over the
@@ -155,13 +158,13 @@ behavioral canary (`tmp/path_kinds/round13/no-autorun-evidence.md`) and the
 two pin tests: the generic operations `path_write`, `path_edit`,
 `path_read`, `path_list`, `path_move`, `path_rename` and `path_delete`
 NEVER execute a probe — they are pure file operations over the kind root —
-and create-and-run lives in the `run` custom operation's `source` input,
-which is the channel custom operations provide (payload returned verbatim,
-exactly like `run_test`).
+and create-and-run lives in the `path_run` custom operation's `source`
+input, which is the channel custom operations provide (payload returned
+verbatim).
 
 The same no-autorun principle covers lib edits: nothing runs automatically
 on `path_write`/`path_edit` or Workspace writes under `lib/`; the explicit
-`reload_workflow` task is the reload surface (mirroring how `run_test` is
+`reload_workflow` task is the reload surface (mirroring how `path_run` is
 invoked after writing a test).
 
 ## Promotion reload hook
@@ -177,31 +180,75 @@ surfaces with the completed move intact) and runs the full workflow reload
 (see [LiveWorkflow.md](LiveWorkflow.md) § workflow-level reload). The
 wiring line in `workflow.rb` is still the agent's explicit edit (the hook
 reloads the checkout; it does not wire anything), but once wired-or-not,
-the process sees current code. Known behavior, not a defect: the
-`path_promote` TOOL result does not surface the hook's `post_move` report —
-the reload's effect is evidenced by outcome (the promoted code registered
-and runnable), not by a visible field.
+the process sees current code.
+
+### Result contract (merge-based)
+
+The hook's return value IS merged into the `path_promote` tool result.
+Engine mechanics: hook args are the caller args plus
+`promotion_destination`/`promotion_target`/`promotion_source_target`/
+`overwrite` (the engine merges caller keys verbatim and validates no extra
+caller arguments), and the hook result is merged with
+`hook_result.merge(result)` — so on any collision ENGINE keys win; the
+hook only adds keys. After a completed move the result therefore always
+carries `promoted: true`, `destination`, `promotion_target` and
+`promotion_source_target` (engine-owned), plus the hook-added reload
+status:
+
+- immediate success — `post_move: "workflow_reload"`,
+  `promotion_status: "succeeded"`, `reload: {ok: true, root, entrypoint,
+  purged, mode}`;
+- immediate-reload failure — NO raise:
+  `promotion_status: "reload_failed"`, `post_move: "workflow_reload"`,
+  `reload: {ok: false, error: <the original normalized diagnostic
+  verbatim>, root}`; the completed move is unmistakable from the engine
+  keys;
+- deferred — `post_move: "workflow_reload_deferred"`,
+  `promotion_status: "deferred"`, `reload: {ok: false, deferred: true}`,
+  plus `deferred_reload` naming the root to reload later.
+
+The hook no longer raises for post-move outcomes (a raise would surface
+only as a serialized exception envelope with the move silently intact).
+It raises only when it cannot construct a report at all — no
+`promotion_target` to derive a checkout root from, or no containing
+checkout.
+
+### defer_reload threading and the schema caveat
+
+`defer_reload` is a ScoutCoder-only caller argument. It threads through
+the engine's verbatim caller-arg merge into the hook with zero engine
+change; when true, the hook skips `reload_workflow!` entirely and returns
+the deferred shape above. Recorded caveat: the engine-owned
+`path_promote` tool schema declares only `kind`/`path`/`location`/
+`overwrite` with `additionalProperties: false`, so a strict model-facing
+provider may refuse to emit the undeclared flag. Consumer tests through
+the agent-facing tool callable pass it through verbatim, so no engine
+edit was made; the single pre-scoped fallback — adding one boolean
+property to the promote branch of the engine's `path_tool_definition` —
+is NO-GO absent consumer evidence that agent callers cannot pass the
+flag. The marker-file alternative was rejected as primary.
 
 ## Trust and sandbox registration shapes
 
-- **`run_test` executes UNSANDBOXED by design** (round-10 step 6). The
+- **`path_run` with `kind: "test_file"` executes UNSANDBOXED by design**
+  (round-10 step 6; round 14 folded the surface into `path_run`). The
   `test_file` kind declares `sandbox: true` like the source kinds, but that
   flag governs which operations the agent may call, NOT how the custom
-  operation executes: `run_test` is registered as a `:full` handler with
+  operation executes: `path_run` is registered as a `:full` handler with
   `authorization: :read`, so the kind path is authorized as a read while
   the fresh child process runs test code with the authority of the caller —
   path authorization is not a process sandbox. Test source is trusted code;
-  expose the `test_file` kind (and the `run_test` task) only to agents that
-  may already execute trusted Ruby in this checkout.
-- **`run_probe` executes UNSANDBOXED by design too** (round 12), with the
-  same registration shape (`:full`, `authorization: :read`) and the same
-  consequence: the kind declares `sandbox: true`, the probe path is
-  authorized as a read, and the fresh child runs the probe with the
-  caller's authority — deliberately outside the Workspace bwrap mounts, so
-  a probe can reach engine checkouts and other files no sandboxed exec tool
-  sees. This is the strongest authority ScoutCoder hands an agent: reserve
-  the `probe` kind for agents already trusted to run arbitrary Ruby in this
-  checkout.
+  expose the `test_file` kind (and the `path_run` operation) only to agents
+  that may already execute trusted Ruby in this checkout.
+- **`path_run` with `kind: "probe"` executes UNSANDBOXED by design too**
+  (round 12), with the same registration shape (`:full`,
+  `authorization: :read`) and the same consequence: the kind declares
+  `sandbox: true`, the probe path is authorized as a read, and the fresh
+  child runs the probe with the caller's authority — deliberately outside
+  the Workspace bwrap mounts, so a probe can reach engine checkouts and
+  other files no sandboxed exec tool sees. This is the strongest authority
+  ScoutCoder hands an agent: reserve the `probe` kind for agents already
+  trusted to run arbitrary Ruby in this checkout.
 - **No kind relocates files outside its roots.** The round-9 paired-test
   relocation hooks were removed in round-10 step 6; nothing writes outside
   the kind roots on promotion anymore, and the agent owns cross-resource

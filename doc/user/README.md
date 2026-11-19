@@ -15,8 +15,8 @@ the repository `README.md` (`# Tasks` section).
   property and Python task file formats, identifier TSVs, `list_entities`,
   production vs development dispatch.
 - [Path kinds operational guide](PathKinds.md) — using the six `path_*`
-  kinds: virtual paths, validate, smoke, run_test, run_probe, promote,
-  wiring, lifecycle.
+  kinds: virtual paths, validate, smoke, `path_run` (tests and probes),
+  promote, wiring, lifecycle.
 - [Testing and execution](Testing.md) — choosing a runner, authoring and
   running tests, exit codes, running a task directly, documentation during
   promotion.

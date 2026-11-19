@@ -302,11 +302,13 @@ class TestPathKinds < Test::Unit::TestCase
 
     r = promote(kind, name)
 
-    # (Reload build, step 3) the promotion_post_move hook now EXISTS (shared
-    # ScoutCoder::WorkflowReload::PROMOTION_POST_MOVE). This sandbox has no
-    # workflow checkout above the destination, so the hook's root derivation
-    # fails LOUDLY by contract; the engine's move itself stands (below).
-    assert_match(/no workflow\.rb found above/, r['exception'].to_s)
+    # (WO5 reconciliation) the promotion_post_move hook now RETURNS for a
+    # destination outside any workflow checkout: the move is complete, so
+    # the caller must see the receipt — promotion_status 'reload_failed'
+    # with the climb diagnostic in reload.error (no root key) — never an
+    # exception envelope.
+    assert_equal 'reload_failed', r['promotion_status'].to_s
+    assert_match(/no workflow\.rb found above/, r['reload']['error'].to_s)
 
     after = snapshot_tree(@sandbox)
     added = after.keys - before.keys
@@ -340,9 +342,10 @@ class TestPathKinds < Test::Unit::TestCase
 
     r = promote(kind, vpath)
 
-    # (Reload build, step 3) same as the entity canary: the hook exists and
-    # fails loudly here (sandbox root has no workflow.rb); engine move stands.
-    assert_match(/no workflow\.rb found above/, r['exception'].to_s)
+    # (WO5 reconciliation) same as the entity canary: the hook returns the
+    # completed-move receipt with the climb diagnostic in reload.error.
+    assert_equal 'reload_failed', r['promotion_status'].to_s
+    assert_match(/no workflow\.rb found above/, r['reload']['error'].to_s)
 
     after = snapshot_tree(@sandbox)
     assert_equal ["lib/ScoutCoder/entity/#{entity}/#{property}.rb"], (after.keys - before.keys).sort
@@ -674,11 +677,11 @@ class TestPathKinds < Test::Unit::TestCase
     File.write(File.join(dir, "test_#{name}.py"), source)
   end
 
-  def run_test_call(kind, path, scope, timeout: nil, location: nil)
+  def path_run_call(kind, path, scope, timeout: nil, location: nil)
     args = { 'kind' => kind, 'path' => path, 'scope' => scope }
     args['timeout_seconds'] = timeout if timeout
     args['location'] = location if location
-    raw = tool('run_test', args)
+    raw = tool('path_run', args)
     if raw.is_a?(String) && raw.include?('"exception"')
       begin
         parsed = JSON.parse(raw)
@@ -695,8 +698,8 @@ class TestPathKinds < Test::Unit::TestCase
     Hash === raw ? raw : JSON.parse(raw)
   end
 
-  # 1. capability/location surface; the aggregated run_test tool installs.
-  #    Round 10: smoke is OFF for test_file (validate + run_test cover it).
+  # 1. capability/location surface; the aggregated path_run tool installs.
+  #    Round 10: smoke is OFF for test_file (validate + path_run cover it).
   def test_test_file_kind_registers_expected_capabilities_and_locations
     defn = @agent.path_kind_definition('test_file')
     caps = defn.fetch('capabilities')
@@ -705,10 +708,10 @@ class TestPathKinds < Test::Unit::TestCase
     end
     %w[patch test smoke].each { |op| refute caps[op], "#{op} must stay off" }
     assert_equal %w[tmp project python], defn.fetch('locations')
-    assert defn.fetch('operations').key?('run_test'),
-           'operations must register run_test so the aggregated tool installs'
-    assert @agent.other_options[:tools].key?('run_test'),
-           'the aggregated run_test tool must be installed on the agent'
+    assert defn.fetch('operations').key?('path_run'),
+           'operations must register path_run so the aggregated tool installs'
+    assert @agent.other_options[:tools].key?('path_run'),
+           'the aggregated path_run tool must be installed on the agent'
   end
 
   # 2. resolve maps the virtual spelling to both locations, all tiers.
@@ -798,12 +801,12 @@ class TestPathKinds < Test::Unit::TestCase
 
   # 5.-10. REMOVED in round 10 with the smoke capability (test_file smoke
   #    tests 5-10 of round 9). Decision: test_file has NO smoke; `validate`
-  #    (static) plus `run_test` (executing, reporting `executed`/`passed`
+  #    (static) plus `path_run` (executing, reporting `executed`/`passed`
   #    and exit status separately) cover every direction those tests
   #    exercised. The equivalent behavioral coverage now lives in the
-  #    run_test tests below: pass/fail directions (11), aggregated
+  #    path_run tests below: pass/fail directions (11), aggregated
   #    directory scope (12), suite discovery + empty-is-error (13). The
-  #    timeout direction is exercised through run_test's per-file
+  #    timeout direction is exercised through path_run's per-file
   #    timeout_seconds by TestFileSupport's own timeout handling.
 
   # 15. (round-10 step 3) canonical grammar: traversal and malformed shapes
@@ -915,22 +918,26 @@ class TestPathKinds < Test::Unit::TestCase
     kind = sandbox_kind!('test_file')
     tf_seed('moves_self', TF_PASS)
     r = promote(kind, 'task/moves_self', overwrite: true)
-    assert_equal 'ok', r['post_move'] if r['post_move']
+    # The shared post-move hook runs for test_file promotion too; in this
+    # sandbox (no workflow.rb above the destination) it returns a
+    # reload_failed receipt — the move itself stands.
+    assert_equal 'workflow_reload', r['post_move'] if r['post_move']
+    assert_equal 'reload_failed', r['promotion_status'].to_s if r['post_move']
     assert File.exist?(File.join(@sandbox, 'test', 'ScoutCoder', 'tasks', 'test_moves_self.rb')),
            'promoted copy in hierarchical project layout'
     refute File.exist?(File.join(@sandbox, 'share', 'test', 'task', 'moves_self.rb')),
            'tmp draft moved away'
   end
 
-  # 23. (round-10 step 6, sub-fix C) run_test schema: scope is OPTIONAL
+  # 23. (round-10 step 6, sub-fix C) path_run schema: scope is OPTIONAL
   #     with default file; timeout_seconds bounds are enforced with
   #     ParameterException before any child process spawns.
-  def test_run_test_scope_default_and_timeout_bounds
+  def test_path_run_scope_default_and_timeout_bounds
     kind = tf_kind!
     tf_seed('dflt', TF_PASS)
 
     # scope omitted -> default 'file'
-    raw = tool('run_test', 'kind' => kind, 'path' => 'task/dflt')
+    raw = tool('path_run', 'kind' => kind, 'path' => 'task/dflt')
     r = Hash === raw ? raw : JSON.parse(raw)
     assert_equal 'file', r['scope']
     assert_equal 1, r['count']
@@ -942,7 +949,7 @@ class TestPathKinds < Test::Unit::TestCase
     [{'timeout_seconds' => 0}, {'timeout_seconds' => -5},
      {'timeout_seconds' => ScoutCoder::TestFileSupport::MAX_TIMEOUT + 1},
      {'timeout_seconds' => 'soon'}].each do |bad|
-      raw = tool('run_test', { 'kind' => kind, 'path' => 'task/dflt',
+      raw = tool('path_run', { 'kind' => kind, 'path' => 'task/dflt',
                                'scope' => 'file' }.merge(bad))
       r = Hash === raw ? raw : JSON.parse(raw)
       assert r.key?('exception'), "bounds violation must fail: #{bad.inspect} -> #{r.inspect}"
@@ -1137,37 +1144,37 @@ class TestPathKinds < Test::Unit::TestCase
     FileUtils.rm_rf(outside) if outside
   end
 
-  # 11. run_test file scope, pass and fail directions, via the aggregated tool.
-  def test_run_test_file_scope_pass_and_fail
+  # 11. path_run file scope, pass and fail directions, via the aggregated tool.
+  def test_path_run_file_scope_pass_and_fail
     kind = tf_kind!
     tf_seed('alpha', TF_PASS)
     tf_seed('beta', TF_FAIL)
 
-    r = run_test_call(kind, 'task/alpha', 'file')
+    r = path_run_call(kind, 'task/alpha', 'file')
     assert_equal 1, r['count']
     assert_equal true, r['ok']
     assert_equal 'clean_pass', r['results'].first['exit_class']
     assert_match(/1 tests?, 1 assertions?/, r['results'].first['summary'].to_s)
 
-    f = run_test_call(kind, 'task/beta', 'file')
+    f = path_run_call(kind, 'task/beta', 'file')
     assert_equal false, f['ok']
     assert_equal 'assertion_failure', f['results'].first['exit_class']
     assert_match(/assert/, f['results'].first['stdout'].to_s)
   end
 
   # 12. directory scope aggregates per-file results and counts.
-  def test_run_test_directory_scope_aggregates
+  def test_path_run_directory_scope_aggregates
     kind = tf_kind!
     tf_seed('alpha', TF_PASS)
     tf_seed('beta', TF_FAIL)
-    r = run_test_call(kind, 'task', 'directory')
+    r = path_run_call(kind, 'task', 'directory')
     assert_equal 2, r['count']
     assert_equal false, r['ok'], 'one failing file => overall ok:false'
     assert_equal %w[alpha.rb beta.rb], r['results'].collect { |x| File.basename(x['file']) }.sort
     assert r['results'].all? { |x| x['ran'] }, 'both files must be reported'  end
 
   # 13. suite scope discovers BOTH locations; empty sandbox is an error.
-  def test_run_test_suite_scope_discovers_both_sides_and_empty_is_error
+  def test_path_run_suite_scope_discovers_both_sides_and_empty_is_error
     kind = tf_kind!
     tf_seed('alpha', TF_PASS)
     tf_seed('rt', TF_PASS, 'integration')
@@ -1175,7 +1182,7 @@ class TestPathKinds < Test::Unit::TestCase
     FileUtils.mkdir_p(proj)
     File.write(File.join(proj, 'test_alpha.rb'), TF_PASS)
 
-    r = run_test_call(kind, '.', 'suite')
+    r = path_run_call(kind, '.', 'suite')
     assert_equal 3, r['count']
     tails = r['results'].collect { |x| x['file'].sub(%r{\A#{Regexp.escape(@sandbox)}/}, '') }.sort
     assert_equal ['share/test/integration/rt.rb', 'share/test/task/alpha.rb',
@@ -1199,7 +1206,7 @@ class TestPathKinds < Test::Unit::TestCase
       'python' => Path.setup(File.join(@sandbox, 'empty_suite_py'))
     }
     @agent.register_path_kind(empty_kind, empty_copy)
-    rr = run_test_call(empty_kind, '.', 'suite')
+    rr = path_run_call(empty_kind, '.', 'suite')
     assert_match(/no test files found|no test directories found/, rr['exception'].to_s)
   end
 
@@ -1436,6 +1443,73 @@ class TestPathKinds < Test::Unit::TestCase
     m = r['exception'].to_s + r['message'].to_s
     assert_match(/failed at stage=check: .*does not exist/, m)
   end
+  # Incident regression (FitAgent BioModelAgent_861cdf355560e55c36219ac90543e952):
+  # a python_task draft inside a NESTED foreign checkout (a
+  # <job>.files/sandbox-style tree several levels under the sandbox root).
+  # The smoke child must resolve the checkout OWNING the draft via the
+  # child_checkout anchor (workflow.rb marker climb from the resolved
+  # draft), not the legacy fixed-depth '../../../..' climb from
+  # roots['project'] — which landed ABOVE the checkout and failed at
+  # stage=load with 'Workflow ./workflow.rb not found'. The load marker
+  # written by the nested checkout's own workflow.rb distinguishes loading
+  # the TARGET workflow.rb from accidentally loading ScoutCoder's own.
+  def test_python_task_smoke_resolves_nested_foreign_checkout
+    confine_kind_root_to_sandbox!
+    kind = 'python_task'
+
+    checkout = File.join(@sandbox, 'deep', 'nest', 'job.files', 'sandbox', 'MyAgent')
+    marker = File.join(checkout, 'WORKFLOW_LOADED')
+    canary = File.join(@sandbox, 'PY_SMOKE_CANARY')
+
+    wf = <<~RUBY
+      require 'scout'
+      require 'scout/workflow/python'
+      File.write(#{marker.inspect}, 'target-workflow-was-loaded')
+      module MyAgent
+        extend Workflow
+      end
+      MyAgent.extend PythonWorkflow
+    RUBY
+    FileUtils.mkdir_p(File.join(checkout, 'share', 'python_tasks'))
+    File.write(File.join(checkout, 'workflow.rb'), wf)
+
+    canary_src = PY_GOOD.sub('return f"hello {name}"',
+                             "open('#{canary}', 'w').write('EXECUTED')\n    return f\"hello {name}\"")
+    File.write(File.join(checkout, 'share', 'python_tasks', 'nested_smoke.py'), canary_src)
+
+    # One registration with roots INSIDE the nested checkout: roots['project']
+    # sits at <checkout>/python/tasks, so the legacy up-4 climb from it
+    # resolves two levels ABOVE the checkout, where no workflow.rb exists.
+    copy = {}
+    @agent.path_kind_definition(kind).each { |k, v| copy[k] = v.is_a?(Hash) ? v.dup : v }
+    copy['roots'] = {
+      'tmp' => Path.setup(File.join(checkout, 'share', 'python_tasks')),
+      'project' => Path.setup(File.join(checkout, 'python', 'tasks'))
+    }
+    @agent.register_path_kind(kind, copy)
+
+    # Invoke from a foreign working directory, as the recorded run did.
+    foreign = Dir.mktmpdir('smoke-foreign-cwd')
+    saved = Dir.pwd
+    Dir.chdir(foreign)
+    r = smoke_result(kind: kind, path: 'nested_smoke')
+    Dir.chdir(saved)
+
+    assert_equal true, r['ok'], "smoke failed: #{r['exception'].to_s} #{r['message'].to_s}"
+    assert_equal 'construct', r['stage']
+    assert_equal false, r['executed']
+    assert_match(/SMOKE_OK stage=construct task=py_fixture/, r['stdout'])
+    # The TARGET checkout's workflow.rb was loaded, not ScoutCoder's own.
+    assert File.exist?(marker), 'nested checkout workflow.rb was not the one loaded'
+    refute File.exist?(canary), 'task body must never run during smoke'
+    assert Dir.glob(File.join(@sandbox, '**', '__pycache__')).empty?,
+           'smoke must never leave a __pycache__'
+  ensure
+    Dir.chdir(saved) if saved && Dir.pwd != saved
+    FileUtils.remove_entry(foreign) if foreign && File.directory?(foreign)
+  end
+
+
 
   # 7. promote matrix: success, no-clobber, overwrite, failure intact.
   def test_python_task_promote_matrix
@@ -1500,7 +1574,7 @@ class TestPathKinds < Test::Unit::TestCase
 
   # 8.16 README-vs-code lock: the registered kind set is exactly the six
   # kinds the `## Agent path kinds` README section documents, and the
-  # run_test / run_probe custom operations are installed as model-facing tools.
+  # path_run / path_run custom operations are installed as model-facing tools.
   def test_registered_kinds_match_readme_documented_set
     documented = %w[task entity entity_property python_task test_file probe].sort
     registered = @agent.path_kind_registry.keys.sort
@@ -1508,23 +1582,29 @@ class TestPathKinds < Test::Unit::TestCase
                  'PATH_KINDS must match the kinds documented in README ## Agent path kinds'
 
     tf = ScoutCoder::PATH_KINDS.fetch('test_file')
-    assert tf.fetch('operations').key?('run_test'),
-           'test_file must register the run_test custom operation'
+    assert tf.fetch('operations').key?('path_run'),
+           'test_file must register the path_run custom operation'
     assert !tf.fetch('capabilities', {}).key?('patch') || tf.fetch('capabilities').fetch('patch').equal?(false),
            'patch must stay off for test_file'
-    assert @agent.other_options[:tools].key?('run_test'),
-           'the run_test tool must be installed alongside the path tools'
+    assert @agent.other_options[:tools].key?('path_run'),
+           'the path_run tool must be installed alongside the path tools'
 
-    # Round 12: the probe kind — one root, promote-less, validate + run_probe.
+    # Round 12: the probe kind — one root, promote-less, validate + path_run.
     pb = ScoutCoder::PATH_KINDS.fetch('probe')
     assert_equal %w[tmp], pb.fetch('locations'),
                  'probe is a ONE-location kind (share/probes only)'
-    assert pb.fetch('operations').key?('run_probe'),
-           'probe must register the run_probe custom operation'
+    assert pb.fetch('operations').key?('path_run'),
+           'probe must register the path_run custom operation'
     assert_equal false, pb.fetch('capabilities').fetch('promote', false),
                  'probe must be promote-less'
-    assert @agent.other_options[:tools].key?('run_probe'),
-           'the run_probe tool must be installed alongside the path tools'
+    assert @agent.other_options[:tools].key?('path_run'),
+           'the path_run tool must be installed alongside the path tools (shared union name)'
+
+    # Round 14: the retired tool names must be GONE from the surface.
+    refute @agent.other_options[:tools].key?('run_probe'),
+           'the retired probe-runner tool must not be installed'
+    refute @agent.other_options[:tools].key?('run_test'),
+           'the retired test-runner tool must not be installed'
   end
 
   # =====================================================================
@@ -1728,7 +1808,7 @@ end
 # Round 11 — python test tier (test_file 'python' location, .py dispatch)
 # =====================================================================
 class TestPathKindsPythonTestTier < TestPathKinds
-  # Reuse the parent harness (sandbox, seeds, run_test_call) so the python
+  # Reuse the parent harness (sandbox, seeds, path_run_call) so the python
   # tier cases sit beside their Ruby counterparts; only the assertions are
   # new. The parent's tests re-run here unchanged, which is exactly the
   # Ruby-unchanged regression the round asked for.
@@ -1738,7 +1818,7 @@ class TestPathKindsPythonTestTier < TestPathKinds
     py_test_seed('ok_probe', PY_TEST_PASS)
     py_test_seed('bad_probe', PY_TEST_FAIL)
 
-    r = run_test_call(kind, 'python_task/ok_probe', 'file', location: 'python')
+    r = path_run_call(kind, 'python_task/ok_probe', 'file', location: 'python')
     assert_equal 1, r['count']
     assert_equal true, r['ok']
     hit = r['results'].first
@@ -1747,7 +1827,7 @@ class TestPathKindsPythonTestTier < TestPathKinds
     assert_equal true, hit['ran']
     assert_match(/python3 -m unittest test_ok_probe/, hit['runner'].to_s)
 
-    f = run_test_call(kind, 'python_task/bad_probe', 'file', location: 'python')
+    f = path_run_call(kind, 'python_task/bad_probe', 'file', location: 'python')
     assert_equal false, f['ok']
     bad = f['results'].first
     assert_equal 'assertion_failure', bad['exit_class']
@@ -1760,7 +1840,7 @@ class TestPathKindsPythonTestTier < TestPathKinds
     kind = tf_kind!
     py_test_seed('d1', PY_TEST_PASS)
     py_test_seed('d2', PY_TEST_FAIL)
-    r = run_test_call(kind, '.', 'directory', location: 'python')
+    r = path_run_call(kind, '.', 'directory', location: 'python')
     assert_equal 2, r['count']
     assert_equal false, r['ok']
     assert_equal %w[test_d1.py test_d2.py],
@@ -1773,7 +1853,7 @@ class TestPathKindsPythonTestTier < TestPathKinds
     kind = tf_kind!
     tf_seed('rb_alpha', TF_PASS)
     py_test_seed('py_alpha', PY_TEST_PASS)
-    r = run_test_call(kind, '.', 'suite')
+    r = path_run_call(kind, '.', 'suite')
     py = r['results'].find { |x| x['file'].end_with?('test_py_alpha.py') }
     assert py, 'suite scope must discover the python-location test'
     assert_equal true, py['passed']
@@ -1786,7 +1866,7 @@ class TestPathKindsPythonTestTier < TestPathKinds
   def test_python_test_syntax_error_is_load_error_not_silent
     kind = tf_kind!
     py_test_seed('syntax_broken', "import unittest\n this is not python\n")
-    r = run_test_call(kind, 'python_task/syntax_broken', 'file', location: 'python')
+    r = path_run_call(kind, 'python_task/syntax_broken', 'file', location: 'python')
     hit = r['results'].first
     assert_equal 'load_error', hit['exit_class']
     assert_equal false, hit['passed']
@@ -1834,8 +1914,8 @@ end
 #
 #   * ONE location root share/probes/ ('tmp'), NO promote, NO smoke,
 #     NO patch, validate (syntax-only, NEVER executes) plus ONE custom
-#     operation run_probe (:full handler, authorization: :read).
-#   * The run_probe operation, when `source` is supplied, owns the
+#     operation path_run (:full handler, authorization: :read).
+#   * The path_run operation, when `source` is supplied, owns the
 #     write: save first (never reverted on failure), AST syntax-check,
 #     then execute — reporting saved/syntax/execution as INDEPENDENT
 #     outcomes.
@@ -1862,7 +1942,7 @@ class TestPathKindsProbe < TestPathKinds
     args = {'kind' => kind, 'path' => path}
     args['source'] = source unless source.nil?
     args['timeout_seconds'] = timeout unless timeout.nil?
-    raw = tool('run_probe', args)
+    raw = tool('path_run', args)
     if raw.is_a?(String) && raw.include?('"exception"')
       begin
         parsed = JSON.parse(raw)
@@ -1946,7 +2026,7 @@ class TestPathKindsProbe < TestPathKinds
   end
 
   # 5. re-execution of an unedited probe (repeatable observable effect):
-  #    run twice through the run_probe operation, second call WITHOUT
+  #    run twice through the path_run operation, second call WITHOUT
   #    source, and observe the body twice.
   def test_probe_rerun_of_unedited_probe_repeats_effect
     kind = probe_kind!

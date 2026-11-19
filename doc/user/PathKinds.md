@@ -7,8 +7,8 @@ filesystems operated with the generic `path_*` tools (registration and
 capability details:
 [doc/developer/PathKindsInternals.md](../developer/PathKindsInternals.md)).
 This page is the operational how-to: addressing paths, validating,
-smoke-checking, running tests and probes, promoting, and wiring after
-promotion.
+smoke-checking, running tests and probes through the single `path_run`
+operation, promoting, and wiring after promotion.
 
 ## Virtual path rules
 
@@ -27,7 +27,7 @@ are RELATIVE to the kind root: no physical root prefixes
 (`share/tasks/...`, `lib/<workflow>/...`, `share/python_tasks/...`,
 `python/tasks/...`), no `.rb` or `.py` suffix, and `entity_property` paths
 are nested `<entity>/<property>`. `.` is a root selector only for
-enumeration surfaces (`path_list`, `run_test` suite scope); it is not a
+enumeration surfaces (`path_list`, `path_run` suite scope); it is not a
 readable path in `path_read`.
 
 The roots per kind (tmp = drafts; project = promoted):
@@ -97,12 +97,14 @@ the target. Checks per kind:
   source must pass a Ruby AST parse. Nothing else is checked, and the file
   is NEVER executed by `path_validate` — no side effects from validate,
   period (a probe can write files, so validating one must not run it).
-  Execution happens exclusively through `run_probe`.
+  Execution happens exclusively through `path_run` with
+  `kind: "probe"`.
 
 ## Paired-test convention
 
 Test files are ordinary `test_file` resources authored with `path_write`;
-execute them explicitly through the kind's `run_test` custom operation.
+execute them explicitly through the `path_run` operation with
+`kind: "test_file"`.
 The association between a source draft and its paired test is an advisory
 naming convention: the Path Engine promotes exactly ONE resource per
 `path_promote` call, and the source kinds do not register paired-test
@@ -153,14 +155,54 @@ the map itself: see
 [doc/developer/PathKindsInternals.md](../developer/PathKindsInternals.md)
 § "Tier-mapping convention status".
 
-## run_test (test_file kind)
+## path_run: one operation, two runnable kinds
 
-The `test_file` kind carries one custom operation, `run_test`, exposed to
-the model as its own `run_test` tool. Inputs: `kind` (always `test_file`),
-`path` (the virtual test-file path; `.` selects the whole suite), `scope`
-(`file`, `directory` or `suite`; default `file`), optional `location`
-(`tmp`, the default, `project`, or `python`) and optional
-`timeout_seconds` (per-file, default 120).
+The `probe` and `test_file` kinds are the two runnable kinds: executing
+them is a custom operation named `path_run`, exposed to the model as ONE
+`path_run` tool whose `kind` enum lists exactly the runnable kinds
+registered for the agent (`probe`, `test_file` when both are loaded; a
+single-kind configuration advertises only that kind). The two kinds
+declare an identical, kind-neutral parameter contract, so one signature
+serves both.
+
+Inputs: `kind` (`\"probe\"` or `\"test_file\"`), `path` (the virtual path),
+`location` (the kind's storage location), `timeout_seconds` (optional,
+1..3600 — when omitted the runner's own default stays in effect), plus
+one kind-specific option: `source` (probe only) and `scope` (test_file
+only). Each kind REJECTS the other kind's option before anything
+executes, so a caller can never believe a supplied `source` or `scope`
+took effect on the wrong kind.
+
+### Copyable examples
+
+(i) Create-and-run a probe in one call (write, syntax-check, execute):
+
+```
+path_run(kind: "probe", path: "hello_probe", source: "puts 'hello'")
+```
+
+(ii) Re-run a probe already saved under `share/probes/`:
+
+```
+path_run(kind: "probe", path: "hello_probe")
+```
+
+(iii) Run a paired test file (and the whole suite):
+
+```
+path_run(kind: "test_file", path: "entity_property/Gene/onset")
+path_run(kind: "test_file", path: ".", scope: "suite", location: "project")
+```
+
+### kind=test_file (test files)
+
+`path` is the virtual test-file path (`.` selects the whole suite) and
+`scope` selects how many files run: `file` (default) runs exactly one,
+`directory` runs every test file under a path prefix, `suite` discovers
+and runs every test file in all locations (tmp, project and python).
+Optional `location` picks the side (`tmp` default, `project`, `python`),
+and optional `timeout_seconds` is per file (default 120 s; 300 s for
+suite scope).
 
 `.rb` test files run in a fresh Ruby process loading the owning checkout's
 `workflow.rb`; `.py` test files run in a fresh Python process
@@ -168,27 +210,23 @@ the model as its own `run_test` tool. Inputs: `kind` (always `test_file`),
 `__pycache__`). Per-file results report the exit status, a classification
 (`clean_pass`, `assertion_failure`, `load_error`, `timeout`), test and
 assertion counts, captured output, and separate `passed` / `ran` booleans.
-The workflow-level `run_test` task wraps the same runner for programmatic
-use; full mechanics (anchor chain, process discipline, exit-code mapping)
-are in [doc/developer/Testing.md](../developer/Testing.md).
-
-## run_probe (probe kind)
-
-The `probe` kind carries one custom operation, `run`, exposed to the model
-as its own `run_probe` tool (the workflow-level `run_probe` task wraps the
-same runner). Inputs: `path` (the bare probe name, no `.rb` suffix, no
-`share/probes/` prefix — single-probe scope only), optional `source` and
-optional `timeout_seconds` (integer 1..3600; default 120).
-
-When `source` is given, one call writes the probe file, syntax-checks it
-(AST-only) and — only when the parse succeeds — executes it in a fresh
-unsandboxed child; the result reports `saved`, `syntax_ok` and the
-`execution` block as independent outcomes. A runtime failure never deletes
-the saved source; a syntax failure skips execution entirely. With `path`
-only, the existing probe is re-executed unchanged. Probes run trusted Ruby
-with the caller's authority, outside any OS sandbox — reserve them for
-Scout-framework investigations. Full mechanics:
+Zero discovered files is an error, not a passing empty suite. Full
+mechanics (anchor chain, process discipline, exit-code mapping) are in
 [doc/developer/Testing.md](../developer/Testing.md).
+
+### kind=probe (unsandboxed probes)
+
+`path` is the bare probe name (no `.rb` suffix, no `share/probes/`
+prefix — single-probe scope only; there is no directory or suite scope).
+With `source`, one call writes/overwrites the probe file, syntax-checks
+it (AST-only) and — only when the parse succeeds — executes it in a
+fresh unsandboxed child; the result reports `saved`, `syntax_ok` and the
+`execution` block as independent outcomes. A runtime failure never
+deletes the saved source; a syntax failure skips execution entirely.
+With `path` only, the existing saved probe is re-executed unchanged.
+Probes run trusted Ruby with the caller's authority, outside any OS
+sandbox — reserve them for Scout-framework investigations. Full
+mechanics: [doc/developer/Testing.md](../developer/Testing.md).
 
 ## promote
 
@@ -209,9 +247,48 @@ is `tmp`, root `share/probes/`), there is no project destination, and the
 engine accordingly installs no `path_promote` support for it (a promote
 request is rejected with "Path kind probe does not support promote").
 
-After a successful promote the five promoting kinds fire an automatic
-workflow reload (see the developer page), so the process sees current code
-— but wiring is still your explicit edit.
+### Promotion result and reload behavior
+
+After a completed move the promote result always identifies the
+destination: `promoted: true` plus `destination`, `promotion_target` and
+`promotion_source_target`. It also reports the reload outcome through
+`promotion_status` — exactly one of:
+
+- `succeeded` — the default path. The promotion fired the automatic
+  workflow reload (`post_move: "workflow_reload"`), and `reload` carries
+  the compact report `{ok: true, root, purged, mode}` where `purged` is
+  the COUNT of purged feature entries (the full list plus `entrypoint`
+  stay in the `reload_workflow` report itself), so the process sees
+  current code without any further call.
+- `reload_failed` — the move is ALREADY COMPLETE (`promoted: true` and the
+  destination keys say so), and only the automatic reload failed:
+  `reload: {ok: false, error: <the original diagnostic verbatim>, root}`.
+  The same status covers checkout-root discovery failure — a promoted
+  target with no `workflow.rb` above it — which reports
+  `reload: {ok: false, error: <the climb diagnostic>}` with no `root` key
+  (none was derivable). There is no exception envelope for either
+  outcome; retrying the promote is pointless (the draft is gone), but
+  retrying the reload after fixing the cause is safe.
+- `deferred` — you asked for deferral (below); nothing was reloaded yet.
+
+The hook raises only when it cannot construct a report at all (no
+`promotion_target` in the promote result).
+
+### Related promotions: defer the reload
+
+Promoting related kinds one at a time fires one reload per promote, and a
+mid-sequence reload can evaluate a drafted property against an entity
+whose promoted file only lands later — the entity-then-properties case is
+the canonical one. Pass the caller argument `defer_reload: true` to each
+promote in the sequence instead, and reload once at the end. The
+canonical step-by-step sequence (including the wiring order and the
+fresh-process verification) lives in the
+`scoutcoder-path-kinds-lifecycle` skill; this document deliberately does
+not duplicate it.
+
+With no `defer_reload` argument, behavior is unchanged for existing
+callers: every promote reloads immediately.
+
 
 ## Wiring after promotion (read this before promoting)
 
@@ -250,12 +327,13 @@ edit.
 
 ## Trust boundaries
 
-- **`run_test` executes UNSANDBOXED by design.** Path authorization
+- **`path_run` executes UNSANDBOXED by design.** Path authorization
   authorizes the kind path as a read; the fresh child runs trusted test
   code with the caller's authority. Only expose the `test_file` kind (and
-  the `run_test` task) to agents that may already execute trusted Ruby in
-  this checkout.
-- **`run_probe` executes UNSANDBOXED by design too**, deliberately outside
+  the `path_run` operation) to agents that may already execute trusted
+  Ruby in this checkout.
+- **`path_run` with `kind: "probe"` executes UNSANDBOXED by design too**,
+  deliberately outside
   the Workspace bwrap mounts so a probe can reach engine checkouts and
   other files no sandboxed exec tool sees. This is the strongest authority
   ScoutCoder hands an agent.
@@ -280,10 +358,10 @@ Create a draft from scratch with `path_write` on the right kind — the kind
 root, the validation shape and (for the source kinds) registration on
 workflow reload all come with the kind. `path_write` stores whole-file
 content you author; the remaining tools read, edit, validate and promote
-what is there (plus `run_test` on the `test_file` kind, `run_probe` on the
-`probe` kind; smoke exists on the source kinds only). For a probe you
-specifically want saved-and-run in one call, `run_probe` with a `source`
-input does exactly that.
+what is there (plus `path_run` for the two runnable kinds: `kind: "test_file"` runs
+tests, `kind: "probe"` runs probes; smoke exists on the source kinds
+only). For a probe you specifically want saved-and-run in one call,
+`path_run` with `kind: "probe"` and a `source` input does exactly that.
 
 Worked example, one direction each way:
 
@@ -304,12 +382,18 @@ The intended loop for one artifact:
 
 1. `path_write` the draft at its `tmp` location.
 2. `path_validate` for shape checks.
-3. `path_write` the paired test as a `test_file` resource, then `run_test`
-   it (file scope) to see it pass in a fresh process.
+3. `path_write` the paired test as a `test_file` resource, then run it
+   with `path_run` (`kind: "test_file"`, file scope) to see it pass in a
+   fresh process.
 4. `path_smoke` (SOURCE kinds only) to confirm the draft
    initializes/registers when the real workflow loads; for `test_file`
-   resources `run_test` is the executing check — there is no smoke.
+   resources `path_run` (`kind: "test_file"`) is the executing check —
+   there is no smoke.
 5. `path_promote` to move the draft to the project side — then promote its
    paired test SEPARATELY through the `test_file` kind (promotion moves one
-   resource; nothing auto-relocates the test).
+   resource; nothing auto-relocates the test). A single promote reloads
+   immediately; for RELATED promotions (entity then its properties) pass
+   `defer_reload: true` to each and reload once after wiring.
 6. Wire it into `workflow.rb`; only then is the promoted artifact live.
+   After wiring deferred promotions, fire the one explicit `reload_workflow`
+   and verify from a fresh process.

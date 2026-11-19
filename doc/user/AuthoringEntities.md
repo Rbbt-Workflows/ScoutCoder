@@ -147,8 +147,9 @@ what its own process loaded; it deliberately does NOT reload drafts defined
 after its process started, so a fresh `share/` draft is invisible to it
 until that process reloads the workflow. That is expected behavior, not a
 defect. Development verification of a fresh draft therefore goes through
-`run_probe` (see [run_probe](PathKinds.md#run_probe-probe-kind)): its fresh
-child preloads the owning checkout's `workflow.rb`, so LiveWorkflow
+`path_run` with `kind: "probe"` (see
+[path_run](PathKinds.md#path_run-one-operation-two-runnable-kinds)): its
+fresh child preloads the owning checkout's `workflow.rb`, so LiveWorkflow
 live-loads the current `share/` drafts and the probe dispatches the
 property exactly as a newly-loaded process would.
 

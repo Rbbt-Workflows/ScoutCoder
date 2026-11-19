@@ -24,8 +24,9 @@ current process directory (`PWD`), treated as the repository root.
   six kinds, capability matrix, tier-mapping ratification status, the
   no-autorun contract, the promotion reload hook, trust/sandbox registration
   shapes.
-- [Testing internals](Testing.md) — how `run_test` and `run_probe` runners
-  work: fresh-process anchors, exit-code mapping, process discipline, seams.
+- [Testing internals](Testing.md) — how the `path_run` runners (test_file
+  and probe kinds) work: fresh-process anchors, exit-code mapping,
+  process discipline, seams.
 
 ## Corrections carried into this tree
 
@@ -47,9 +48,10 @@ corrected here (audit: `doc_redesign/ScoutCoder.dossier.md`):
    [PropertyDispatch.md](PropertyDispatch.md).
 5. `doc/` now exists (this tree); the README is no longer the sole
    documentation file.
-6. The registered task count is **18** (verified:
+6. The registered task count was **18** when this list was written
+   (verified then:
    `ruby -Ilib -e 'require "./workflow"; puts ScoutCoder.all_tasks.size'`
-   → 18; the README `# Tasks` section carries exactly 18 entries), and
-   all 18 are agent-exposed (`LLM.workflow_tools(ScoutCoder)` surfaces
-   every task; campaign exposure table
-   `doc_redesign/consolidation/task_exposure.tsv`).
+   → 18). The round-14 `path_run` consolidation removed the two exported
+   runner tasks for tests and probes (they now execute through
+   the agent `path_run` path-kind operation, not a workflow task), leaving
+   **16** registered tasks, all agent-exposed.

@@ -25,7 +25,7 @@
 # `test` is off (nothing may be named `test`; the engine's built-in `test`
 # operation is scheduled for removal and this kind must not depend on it).
 # `smoke` is off (round 10): test_file is checked statically by `validate`
-# and executed by the custom operation `run_test`, which reports
+# and executed by the custom operation `path_run`, which reports
 # `executed`/`passed` and the exit status separately — the old
 # ran-OK-even-if-failing smoke verdict is redundant. The runner is declared
 # under `operations` (registering it establishes support implicitly), backed
@@ -62,7 +62,7 @@ module ScoutCoder
   module PathKindTestFiles
     # (Round 10: SMOKE_TIMEOUT is removed with the smoke handler. Per-run
     # timeouts come from TestFileSupport::FILE_TIMEOUT /
-    # DIRECTORY_TIMEOUT / SUITE_TIMEOUT through the run_test operation.)
+    # DIRECTORY_TIMEOUT / SUITE_TIMEOUT through the path_run operation.)
     module_function
 
     # First `task :name` (or `task 'name'`) declaration in a task source.
@@ -525,9 +525,10 @@ module ScoutCoder
       "Unit and integration test files for #{target_workflow_name} (drafts in share/test, " \
       "promoted copies in test/#{target_workflow_name}). " \
       'Virtual paths are relative to the kind root: first segment is the tier ' \
-      '(task, entity, entity_property, helper, integration), e.g. task/greet_user or ' \
+      '(task, entity, entity_property, helper, integration), e.g. task/greet_user, ' \
+      'entity_property/Gene/onset or ' \
       "integration/round_trip; no .rb suffix, no physical prefix (share/test/, test/#{target_workflow_name}/), " \
-      'and "." is a root selector only for enumeration (path_list, run_test suite scope). ' \
+      'and "." is a root selector only for enumeration (path_list, path_run suite scope). ' \
       'Paired-test tiers: task -> share/test/task/<name>.rb -> test/' + target_workflow_name + '/tasks/test_<name>.rb; ' \
       'entity -> share/test/entity/<Type>.rb -> test/' + target_workflow_name + '/entity/test_<Type>.rb ' \
       '(<Type> is the entity-type name in its OWN spelling — CamelCase is canonical ' \
@@ -556,8 +557,8 @@ module ScoutCoder
       'move' => true, 'rename' => true, 'delete' => true,
       'validate' => true, 'promote' => true
       # 'smoke' => false (round-10 decision: test_file has NO smoke; the
-      #                   static `validate` plus the executing `run_test`
-      #                   cover it — run_test reports `executed`/`passed`
+      #                   static `validate` plus the executing `path_run`
+      #                   cover it — path_run reports `executed`/`passed`
       #                   and exit status separately, so the old
       #                   ran-OK-even-if-failing smoke verdict is redundant)
       # 'patch' => false (default off, same as the source kinds)
@@ -578,7 +579,7 @@ module ScoutCoder
     # copy must NOT carry this hook — see the regression suite note.)
 
     # Real files under the location root -> virtual spellings, so
-    # path_list round-trips with path_read / run_test.
+    # path_list round-trips with path_read / path_run.
     'list' => lambda do |agent, prefix, location|
       ScoutCoder.path_kind_list_test_files(prefix, location, agent)
     end,
@@ -592,7 +593,7 @@ module ScoutCoder
     end,
 
     # (Round 10: the 'smoke' handler is removed. test_file has NO smoke —
-    # `validate` is the static check and `run_test` is the executing check,
+    # `validate` is the static check and `path_run` is the executing check,
     # reporting `executed`/`passed` and the exit status separately.)
 
     # Declarative destination; a test has no paired test, so the round-10
@@ -606,22 +607,20 @@ module ScoutCoder
     'promotion_post_move' => ScoutCoder::WorkflowReload::PROMOTION_POST_MOVE,
 
     'operations' => {
-      'run_test' => {
-        'description' => 'Run test files: one file, every file under a path prefix, or the entire suite, each in a fresh Ruby process. Each child loads the workflow.rb of the project checkout that owns the test file (ENV PATH_KIND_PROJECT_ROOT overrides). Virtual test paths are relative to the test_file kind root: tier/name such as task/greet_user, no .rb suffix, no physical prefix; "." is the suite-root selector.',
-        'parameters' => {
-          'properties' => {
-            'scope' => {'type' => 'string', 'enum' => %w[file directory suite], 'default' => 'file',
-                        'description' => 'OPTIONAL (default file). file: run the single test file at path. directory: run every test file under the path prefix. suite: run every discovered test file in both locations (path is the root selector; use ".").'},
-            'timeout_seconds' => {'type' => 'integer', 'default' => 120,
-                                  'minimum' => TestFileSupport::MIN_TIMEOUT,
-                                  'maximum' => TestFileSupport::MAX_TIMEOUT,
-                                  'description' => "OPTIONAL per-file timeout in seconds, #{TestFileSupport::MIN_TIMEOUT}..#{TestFileSupport::MAX_TIMEOUT} (default 120; 300 for suite scope). Out-of-range or non-integer values are rejected."}
-          }
-          # (Round 10, step 6: `required` dropped — scope is optional with
-          # default 'file'; the engine's contract merge already requires
-          # kind+path. The old schema required scope AND defaulted it.)
-        },
+      'path_run' => {
+        'description' => ScoutCoder::PATH_RUN_DESCRIPTION,
+        'parameters' => ScoutCoder::PATH_RUN_PARAMETERS,
         'implementation' => lambda do |agent, target, args|
+          # Union contract (round 14): source belongs to kind=probe. Reject
+          # it BEFORE any execution — a test_file body must never come from
+          # a caller-supplied string, and silently ignoring it would let an
+          # agent believe supplied source was tested.
+          if args['source']
+            raise ParameterException,
+                  'path_run (kind=test_file): source is not applicable to the test_file kind ' \
+                  '(test files are written with path_write, never run from a supplied string); ' \
+                  'source belongs to kind=probe. '
+          end
           # Round-11 conformance: derive the DISPATCHED kind from the pinned
           # root that authorization just validated (target's location root)
           # rather than a kind name — the engine strips 'kind' from args
@@ -955,7 +954,7 @@ module ScoutCoder
 
     # Directory the fresh-process children load the workflow from. Anchor
     # contract (round: path-kinds contract fixes, discharging round-9
-    # deferred item 8): a run_test child loads the workflow.rb of the
+    # deferred item 8): a path_run child loads the workflow.rb of the
     # project checkout that OWNS the resolved test file. Priority:
     #   1. ScoutCoder::PATH_KIND_PROJECT_ROOT when set — explicit override;
     #      the regression suite seam (test_path_kinds.rb) depends on it.
@@ -970,7 +969,7 @@ module ScoutCoder
     #      a project (e.g. a sandbox file under no checkout).
     # The aggregator forwards it to `ScoutCoder.child_checkout`, and
     # `TestFileSupport.run_child` calls exactly that (via respond_to?) for
-    # run_test children. Removed once in round 10 by mistake; the run_test
+    # path_run children. Removed once in round 10 by mistake; the path_run
     # suite failed immediately — kept.
     def child_checkout(file: nil, pinned_root: nil)
       (ScoutCoder.const_defined?(:PATH_KIND_PROJECT_ROOT, false) &&
