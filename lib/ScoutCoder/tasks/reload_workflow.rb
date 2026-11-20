@@ -5,7 +5,7 @@ module ScoutCoder
   input :root, :string, 'OPTIONAL workflow checkout root (a directory containing workflow.rb); defaults to the ScoutCoder checkout root', nil, nofile: true
   task :reload_workflow => :json do |root|
     begin
-      root = ScoutCoder::PATH_KIND_ROOT if root.nil? || root.to_s.empty?
+      root = Scout.root.find if root.nil? || root.to_s.empty?
       report = ScoutCoder::WorkflowReload.reload_workflow!(root: root)
       # The module object is not JSON-serializable; name it for the report.
       report['workflow'] = report['workflow'].name
