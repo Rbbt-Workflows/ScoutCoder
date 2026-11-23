@@ -58,7 +58,7 @@ run them, and the full validate→smoke→promote order are the sibling
 skill's territory (`scoutcoder-path-kinds-lifecycle`).
 
 Do not treat file existence or successful validation as proof the entity
-works; dispatch behavior is exercised through `run_task` or
+works; dispatch behavior is exercised through `debug_task` or
 `path_run` (`kind: "test_file"`).
 
 ## Identifier TSVs and Python tasks (what to author)

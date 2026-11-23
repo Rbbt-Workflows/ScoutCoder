@@ -37,8 +37,15 @@ ScoutCoder=/$PWD filter="*.rb *.md *.rake Rakefile *.rdoc *.R *.sh *.js *.haml *
 
   entity_case
 
+  skills
+
  }
  lib=lib {
+  scout=scout{
+   llm=llm{
+    text_edit.rb
+   }
+  }
   ScoutCoder=ScoutCoder{
    helper_test_support.rb
    path_kinds.rb
@@ -56,11 +63,8 @@ ScoutCoder=/$PWD filter="*.rb *.md *.rake Rakefile *.rdoc *.R *.sh *.js *.haml *
     document_task.rb
     documentation.rb
     entity_tools.rb
-    helper_tools.rb
     list_entities.rb
-    python_task_tools.rb
-    task_test_tools.rb
-    test_runner_tools.rb
+    reload_workflow.rb
     workflow_tools.rb
    }
   }
@@ -101,9 +105,6 @@ ScoutCoder=/$PWD filter="*.rb *.md *.rake Rakefile *.rdoc *.R *.sh *.js *.haml *
   }
   scoutcoder-repo-documentation=scoutcoder-repo-documentation {
    SKILL.md
-   agent-surfaces.md
-   doc-areas.md
-   other-repos.md
    workflow-readme.md
   }
  }

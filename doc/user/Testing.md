@@ -85,6 +85,18 @@ processes, but Scout job/Step results are persistent and are not
 automatically cleared; see [Fresh process versus fresh
 result](ToolSelection.md#fresh-process-versus-fresh-result).
 
+**Fresh tests versus cached task results.** `path_run(kind: "test_file")`
+executes the test code in a fresh process on every invocation; it does not
+replay a cached test verdict. However, tests may invoke ordinary Scout workflow
+jobs, whose results persist across test runs. Changing a task implementation
+does not invalidate its existing results. When a regression test must exercise
+the current implementation, explicitly refresh the addressed Scout job. Use
+`refresh: refresh` or `refresh: deep_refresh ` in normal agent-facing task
+calls, `clean: true` in ScoutCoder's `debug_task`, or the corresponding refresh
+option in the Ruby Step API. Do not delete job directories merely to force
+recomputation. Reloading a workflow updates registration; refreshing a job
+updates its result. These are separate operations.
+
 The test-file path convention (a test mirrors its tested file's path under
 the test tree) is ScoutCoder doctrine, with the pairing map in
 [PathKinds.md](PathKinds.md#paired-test-convention); scout-rig's suite is

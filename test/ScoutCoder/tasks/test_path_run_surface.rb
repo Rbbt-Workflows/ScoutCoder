@@ -50,8 +50,9 @@ class TestPathRunSurface < Test::Unit::TestCase
     end
   end
 
-  def run_tool(path, scope, timeout: nil, source: nil)
-    args = { 'kind' => 'test_file', 'path' => path, 'scope' => scope, 'location' => 'tmp' }
+  def run_tool(path, scope, timeout: nil, source: nil, location: 'tmp')
+    args = { 'kind' => 'test_file', 'path' => path, 'scope' => scope }
+    args['location'] = location if location
     args['timeout_seconds'] = timeout if timeout
     args['source'] = source if source
     raw = @agent.other_options[:tools]['path_run'].first.call('path_run', args)
@@ -100,6 +101,35 @@ class TestPathRunSurface < Test::Unit::TestCase
     confine!
     r = run_tool('task/nope', 'file')
     assert_match(/does not exist or is not a file/, r['exception'].to_s)
+  end
+
+  def test_path_run_reports_promoted_file_and_only_runs_it_on_explicit_retry
+    confine!
+    path = 'task/neko_python_tasks'
+    project_file = @agent.resolve_path('test_file', path, 'project').to_s
+    assert_equal File.join(@sandbox, 'test/ScoutCoder/tasks/test_neko_python_tasks.rb'), project_file
+    FileUtils.mkdir_p(File.dirname(project_file))
+    marker = File.join(@sandbox, 'ran')
+    File.write(project_file, "File.write(#{marker.inspect}, 'yes')\n" + PASS)
+
+    missing = run_tool(path, 'file', location: nil)
+    assert_match(/location="project"/, missing.fetch('exception'))
+    assert_false File.exist?(marker)
+
+    retry_result = run_tool(path, 'file', location: 'project')
+    assert_equal true, retry_result['ok']
+    assert_equal project_file, retry_result['target']
+    assert_equal 'yes', File.read(marker)
+  end
+
+  def test_path_run_uses_requested_copy_when_both_exist
+    seed!
+    promoted = @agent.resolve_path('test_file', 'task/alpha', 'project').to_s
+    assert_equal File.join(@sandbox, 'test/ScoutCoder/tasks/test_alpha.rb'), promoted
+    FileUtils.mkdir_p(File.dirname(promoted))
+    File.write(promoted, FAIL)
+    assert_equal true, run_tool('task/alpha', 'file')['ok']
+    assert_equal false, run_tool('task/alpha', 'file', location: 'project')['ok']
   end
 
   def test_path_run_file_scope_timeout_override

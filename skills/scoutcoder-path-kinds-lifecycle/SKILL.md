@@ -1,6 +1,6 @@
 ---
 name: scoutcoder-path-kinds-lifecycle
-description: Drive the full ScoutCoder path-kind lifecycle for one artifact - author a draft, validate it, run its paired test, smoke it, then promote and wire it. Use when creating or changing a workflow task, entity, property, Python task, test file or probe, or when choosing between path_validate, path_smoke, path_run, run_task or planning a promotion. Entity/property/Python-task formats, naming rules and identifier TSVs belong to the scoutcoder-entity-authoring skill instead. Triggers path_write, path_validate, path_smoke, path_run, run_task, promote, paired test, draft, test_file kind, probe kind, wire into workflow.rb, reload_workflow.
+description: Drive the full ScoutCoder path-kind lifecycle for one artifact - author a draft, validate it, run its paired test, smoke it, then promote and wire it. Use when creating or changing a workflow task, entity, property, Python task, test file or probe, or when choosing between path_validate, path_smoke, path_run, debug_task or planning a promotion. Entity/property/Python-task formats, naming rules and identifier TSVs belong to the scoutcoder-entity-authoring skill instead. Triggers path_write, path_validate, path_smoke, path_run, debug_task, promote, paired test, draft, test_file kind, probe kind, wire into workflow.rb, reload_workflow.
 ---
 
 # Path-kind operational lifecycle: author, validate, test, probe, promote
@@ -43,9 +43,9 @@ Virtual-path rules, per-kind roots and validate check lists are owned by
 | Task job constructs / entity registers / property accessor resolves | `path_smoke` | Source kinds only; no task execution, no property dispatch |
 | Behavior assertion holds | `path_run` (`kind: "test_file"`) on the paired test | Fresh process, UNSANDBOXED by design; trusted code only |
 | Ad-hoc snippet against the loaded workflow | `path_run` (`kind: "probe"`) | Fresh unsandboxed child, caller's authority |
-| Invoke the workflow task itself | `run_task` | Ordinary Scout job execution; no assertions |
+| Invoke the workflow task itself | `debug_task` | Ordinary Scout job execution; no assertions |
 
-Behavior claims need `path_run` (`kind: "test_file"`) or `run_task`,
+Behavior claims need `path_run` (`kind: "test_file"`) or `debug_task`,
 never smoke alone.
 
 ## Promotion doctrine
@@ -68,7 +68,7 @@ never smoke alone.
   3. wire `workflow.rb`: entity require BEFORE the LiveWorkflow share
      load, property require AFTER;
   4. fire exactly ONE explicit `reload_workflow` with the checkout `root`
-     (or `run_task` with `clean: true` on the reload job);
+     (or `debug_task` with `clean: true` on the reload job);
   5. verify from a fresh process that the wired artifact loads.
 
 - Permanent source/wiring changes are explicit Workspace edits; inspect
@@ -82,7 +82,7 @@ never smoke alone.
 ## Fresh process is not fresh result
 
 Test runners start a new process, but Scout's job/Step caches outlive it.
-For a regression check that matters, use `run_task`'s `clean: true`, clean
+For a regression check that matters, use `debug_task`'s `clean: true`, clean
 the exact job/Step, or inspect reported replay status — otherwise you may
 be reading a cached success.
 

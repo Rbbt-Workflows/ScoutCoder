@@ -22,7 +22,7 @@ Its capabilities fall into two groups:
    validate them (`path_validate`, `path_smoke`), run their tests and
    probes in fresh processes through the single `path_run` operation
    (`kind: "test_file"` for test files, `kind: "probe"` for probes);
-   execute tasks from installed workflows (`run_task`); and
+   debug tasks from installed workflows (`debug_task`); and
    inspect or document the resulting jobs (`job_info`, `job_status`,
    `document_task`, `reload_workflow`, `list_tasks`, `task_inputs`,
    `task_dependencies`, `task_code`, `list_entities`).
@@ -174,8 +174,8 @@ tools present (the tool schema is built from `rec_inputs(name).uniq`), and
 re-declaring a dependency input on the parent is free. Propagation detail:
 scout-gear `doc/user/BuildingWorkflows.md` § dependencies.
 
-## run_task
-Run a workflow task synchronously
+## debug_task
+Run a workflow task synchronously and return execution information
 
 Inputs: `workflow` and `task` (required strings), `inputs` (JSON object as
 text, default `{}`), and `clean` (boolean, default `false`). Runs the task
@@ -185,7 +185,10 @@ recomputes the addressed job. It is a task-execution surface, not a test
 runner or an OS sandbox. Inspect-then-run examples and where job outputs
 land: [Testing](doc/user/Testing.md) § "Running a task directly".
 
-`run_task` is the execution tool; use `job_info` or `job_status` when you
+This is not the normal way for agents to run a task; instead, it should be
+provided as part of their tooling as regular tool calling functions.
+
+`debug_task` is the execution tool; use `job_info` or `job_status` when you
 already have the workflow, task, and inputs for an existing job and only need
 to inspect it.
 
@@ -245,8 +248,8 @@ realpathed root (cached entrypoint included) and re-evaluates `workflow.rb`
 so `require_relative` lines re-fire — lib edits and promotions take effect
 immediately; features outside the root are never purged, and errors are
 loud. Returns a report (`ok`, `root`, `entrypoint`, `purged`, `workflow`,
-`reload`). `clean` is not an input of this tool — it belongs to `run_task`
-(`run_task` with `clean: true` recomputes the addressed job and is the
+`reload`). `clean` is not an input of this tool — it belongs to `debug_task`
+(`debug_task` with `clean: true` recomputes the addressed job and is the
 documented way to force a fresh execution: without `clean`, a job —
 default-root or explicit-root — replays a cached execution when one
 exists).

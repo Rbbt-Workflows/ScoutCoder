@@ -38,6 +38,10 @@ scout.task(count_nonblank)
 
 Keep the function and its explicit module-level `scout.task(function)` registration in the task file. Metadata discovery executes that file, so keep import-time work small and stdout clean. The function docstring preamble becomes the description and `Args:` entries document parameter names. The annotations determine types. Put expensive imports inside the function where practical.
 
+Scout distinguishes file inputs from value inputs. A file input identifies a resource to read, so the task receives a filename. A value input represents the data itself, but Scout also permits callers to supply that data through an existing file: for ordinary string inputs, Scout can load the file before calling the task.
+
+PythonWorkflow translates Python annotations into these Scout input types. Use `Path` when the Python function needs the filename and will open the file itself. Use `str` when the function needs the text content, whether supplied directly or loaded by Scout. If a string must remain literal even when it matches an existing filename, the Scout input requires `noload: true`; Python annotations do not currently expose that option directly.
+
 ## Check the file boundary
 
 | Function contract | Metadata → Scout input | Python invocation |
@@ -46,7 +50,7 @@ Keep the function and its explicit module-level `scout.task(function)` registrat
 | `text: str` | `string` → `:string` | Receives text. Scout may load the contents when a supplied string names an existing file. |
 | `samples: list[str]` | `list[string]` → `:array` | Pass a JSON array such as `["A","B"]`; argv preserves the items. |
 | `sources: list[Path]` | `list[path]` → `:file_array` | Supply an array of filenames and open each with Path. |
-| `limit: int = 10` or `include_empty: bool = False` | `integer` or `boolean` plus the default | Omit the option to use the default. Supply typed numbers and booleans through run_task. |
+| `limit: int = 10` or `include_empty: bool = False` | `integer` or `boolean` plus the default | Omit the option to use the default. Supply typed numbers and booleans through debug_task. |
 
 The Ruby adapter maps the generated parameter metadata to its type and required flag. It does not expose a general Python annotation for `:noload` or `:nofile`. If an identifier must remain literal even when it names an existing file, design an explicit literal-value interface (for example, a native Ruby task declaring `input :label, :string, "Literal label", nil, noload: true`). Passing that value through another ordinary Scout string input can reintroduce loading. See [Ruby input and dependency contracts](../scoutcoder-task-authoring/contracts.md).
 
@@ -56,8 +60,8 @@ Use explicit defaults for optional parameters. Supply nonempty lists to the gene
 
 1. Use `path_write`, `path_validate`, then `path_smoke` with `kind: "python_task", path: "count_nonblank"`. Validation checks source shape. Smoke checks workflow loading and registration. Neither executes the function on the fixture.
 2. Promote with `path_promote` using the same kind and path. The usual physical locations are `share/python_tasks/count_nonblank.py` and `python/tasks/count_nonblank.py`. In the supplied implementation extending `PythonWorkflow` loads tasks from `libdir.python.tasks.find`; setting `python_task_dir` also loads that directory. In a workflow already configured this way, promotion into the discovered directory is sufficient for a fresh load. Follow the target's export convention after discovery if agents need the task.
-3. From the target checkout, use a disposable fixture containing `A`, a blank line and `B`. Call `run_task` with the target workflow name, task `count_nonblank` and inputs JSON `{"source_file":"lines.txt"}`. Expect integer 2. For composition, also pass the actual result filename of a producer. Python-side tests use kind `test_file`, virtual path `python_task/count_nonblank`, `location: "python"`, and run with `path_run` at that location.
-4. After a signature edit, reload the target workflow and repeat the invocation in the same conversation. A clean job rules out result replay; it addresses a different question from whether the workflow has the current registration.
+3. From the target checkout, use a disposable fixture containing `A`, a blank line and `B`. Call `debug_task` with the target workflow name, task `count_nonblank` and inputs JSON `{"source_file":"lines.txt"}`. Expect integer 2. For composition, also pass the actual result filename of a producer. Python-side tests use kind `test_file`, virtual path `python_task/count_nonblank`, `location: "python"`, and run with `path_run` at that location.
+4. After modifying Python task code, distinguish registration from execution. Reload the workflow when its registered signature or metadata must change; use `debug_task(clean: true)` or an exported call with `refresh: refresh` or `refresh: deep_refresh` to recompute the task result. Existing Scout jobs are not invalidated by source edits. When a Ruby regression test invokes a PythonWorkflow task, refresh the inner job explicitly; rerunning the test file alone does not guarantee that the Python function executes again.
 
 ### Localize a disagreement with one comparison
 
@@ -65,7 +69,7 @@ Use explicit defaults for optional parameters. Supply nonempty lists to the gene
 |---|---|
 | What did the Python runner describe? | In the task environment, run `python python/tasks/count_nonblank.py --scout-metadata`. Expect parameter type `path`, required true, and return type `integer`. |
 | What did a fresh workflow register? | `scout task workflow.rb count_nonblank -h` should show `source_file=<file>`. |
-| What did the actual consumer use? | Run the tiny fixture through `run_task`. If it fails, inspect the target checkout, registered input type and job's supplied versus effective input. Successful standalone Python execution checks only the Python side. |
+| What did the actual consumer use? | Run the tiny fixture through `debug_task`. If it fails, inspect the target checkout, registered input type and job's supplied versus effective input. Successful standalone Python execution checks only the Python side. |
 
 ## Dependencies, results and errors
 

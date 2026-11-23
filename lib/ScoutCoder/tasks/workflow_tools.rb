@@ -146,9 +146,9 @@ module ScoutCoder
   input :task, :string, 'Task name'
   input :inputs, :text, 'JSON object of task input names to values', {}
   input :clean, :boolean, 'Clean the job cache before execution', false
-  task :run_task => :json do |workflow, task, inputs, clean|
+  task :debug_task => :json do |workflow, task, inputs, clean|
     result = { workflow: workflow.to_s, task: task.to_s, inputs: {}, status: 'error',
-               output: nil, job_path: nil, short_path: nil, cache_replay: nil, error: nil }
+               output: nil, job_path: nil, short_path: nil, time_elapsed: nil, total_time_elapsed: nil, cache_replay: nil, error: nil }
     begin
       wf, _definition = managed_task(workflow, task)
       provided = managed_inputs(inputs)
@@ -163,6 +163,8 @@ module ScoutCoder
       result[:output] = step.run
       info = step.info rescue {}
       result[:status] = (info[:status] || (step.done? ? 'done' : 'unknown')).to_s
+      result[:time_elapsed] = info[:time_elapsed]
+      result[:total_time_elapsed] = info[:total_time_elapsed]
     rescue StandardError => error
       result[:error] = { class: error.class.name, message: error.message }
       begin
@@ -205,5 +207,5 @@ module ScoutCoder
 
   export :list_tasks, :task_inputs, :task_code, :task_dependencies
   export :task_inputs, :task_code, :task_dependencies
-  export_exec :run_task, :job_info, :job_status
+  export_exec :debug_task, :job_info, :job_status
 end

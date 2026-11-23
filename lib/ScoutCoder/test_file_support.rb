@@ -289,7 +289,9 @@ module ScoutCoder
         case scope
         when 'file'
           unless File.file?(target.to_s)
-            raise ParameterException, "path_run: test_file at '#{target}' does not exist or is not a file"
+            message = "path_run: test_file at '#{target}' does not exist or is not a file"
+            hint = alternate_location_hint(agent, target, args)
+            raise ParameterException, [message, hint].compact.join('. ')
           end
           wrap_result(scope, [run_file(target.to_s, timeout_seconds: timeout || FILE_TIMEOUT)], target)
         when 'directory'
@@ -374,6 +376,45 @@ module ScoutCoder
       end
 
       private
+
+      # Report only exact, readable counterparts of a missing file. The engine
+      # may remove the kind from custom-operation arguments. Confirm the target
+      # belongs to the production mapping before suggesting a test_file call.
+      def alternate_location_hint(agent, target, args)
+        path = args['path']
+        return unless path && agent.respond_to?(:path_kind_definition)
+
+        kind = args['kind'] || 'test_file'
+        definition = agent.path_kind_definition(kind)
+        return unless definition.is_a?(Hash)
+
+        location = args['location'] || definition.fetch('default_location')
+        resolve = lambda do |loc|
+          if args['path_map']
+            agent.resolve_path(kind, path, loc, args['path_map'])
+          else
+            agent.resolve_path(kind, path, loc)
+          end
+        end
+        return unless resolve.call(location).to_s == target.to_s
+
+        matches = definition.fetch('locations').select do |other|
+          next false if other == location
+
+          candidate = resolve.call(other)
+          agent.path_authorize!(kind, candidate, other, mode: :read)
+          File.file?(candidate.to_s)
+        rescue ParameterException, SecurityError, SystemCallError
+          false
+        end
+        return if matches.empty?
+
+        "Found #{path.inspect} for kind=#{kind.inspect} at " \
+          "#{matches.map { |loc| "location=#{loc.inspect}" }.join(' or ')}. " \
+          "Retry path_run with the intended location. No test ran"
+      rescue ParameterException, KeyError, SecurityError, SystemCallError
+        nil
+      end
 
       # Aggregate one per-file result list into the path_run return shape.
       def wrap_result(scope, results, target)

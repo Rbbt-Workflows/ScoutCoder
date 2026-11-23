@@ -181,10 +181,10 @@ class TestPromotionReloadDeferral < Test::Unit::TestCase
     assert $LOADED_FEATURES.include?(entry), 'entrypoint must be cached before the reload'
 
     # 4. exactly ONE explicit reload, through the documented agent-facing
-    # invocation (the run_task TOOL carrying reload_workflow with an
+    # invocation (the debug_task TOOL carrying reload_workflow with an
     # explicit root and clean: true — see the forced-reload pinning test).
     # Pinned rule (WO5): an explicit-root reload_workflow job executed via
-    # run_task WITHOUT clean replays the cached job when one exists; clean
+    # debug_task WITHOUT clean replays the cached job when one exists; clean
     # forces exactly one fresh execution.
     reload_job = ScoutCoder.job(:reload_workflow, nil, 'root' => @fx)
     reload_job.clean
@@ -467,7 +467,7 @@ class TestPromotionReloadDeferral < Test::Unit::TestCase
 
   # ---- (f) forced reload through the DOCUMENTED agent invocation (WO5) ----
 
-  def test_forced_reload_via_run_task_executes_exactly_once_per_clean
+  def test_forced_reload_via_debug_task_executes_exactly_once_per_clean
     # Execution-sentinel fixture (WO6 recalibration): workflow.rb requires a
     # lib feature whose body APPENDS one mark to a log file. Because the
     # sentinel feature is required through require_relative from the
@@ -506,11 +506,11 @@ class TestPromotionReloadDeferral < Test::Unit::TestCase
     baseline = execs.call
 
     # The documented invocation shape (README # reload_workflow / PathKinds
-    # run_task section): the run_task TOOL carries the reload_workflow task,
+    # debug_task section): the debug_task TOOL carries the reload_workflow task,
     # root names the fixture checkout, and clean — an input of the TOOL, not
     # of reload_workflow — forces a fresh execution.
     call = lambda do |clean|
-      ScoutCoder.job(:run_task, nil,
+      ScoutCoder.job(:debug_task, nil,
                      'workflow' => 'ScoutCoder',
                      'task' => 'reload_workflow',
                      'inputs' => JSON.generate('root' => @fx),
