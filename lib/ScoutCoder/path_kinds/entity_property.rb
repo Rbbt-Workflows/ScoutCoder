@@ -10,7 +10,7 @@ module ScoutCoder
     # virtual paths <entity>/<property>.rb (one kind, decision 2).
     #   tmp     -> <checkout>/share/entity_properties/<entity>/<property>.rb
     #   project -> <checkout>/lib/<workflow>/entity/<entity>/<property>.rb
-    # Shape: top-level `module <CamelCase(entity segment)>` with at least one
+    # Shape: the module named by the full entity segment with at least one
     # `property :name => :type do ... end` and NO extend line (the entity file
     # owns the extend) — entity_tools.rb property_source.
     # Entity names are CamelCase (canonical; e.g. DemoWidget/palette);
@@ -23,7 +23,7 @@ module ScoutCoder
         '<entity>/<property>.rb (drafts in share/entity_properties, promoted ' \
         "copies in lib/#{target_workflow_name}/entity/<entity>/<property>.rb). " \
         'Virtual paths are relative to the kind root and NESTED: <entity>/<property> ' \
-        'such as DemoWidget/palette (the entity segment is CamelCase, canonical; a ' \
+        'such as AGS::Gene/label or DemoWidget/palette (a ' \
         'legacy snake_case segment such as demo_widget/tag_palette is accepted with a ' \
         'warning), no .rb suffix and no physical prefix.',
 
@@ -93,17 +93,7 @@ module ScoutCoder
           expected = ScoutCoder::EntityDefinitionSupport.validate_entity_type_name!(
             entity, sibling_entities_root, errors, warnings, 'entity name'
           )
-          declared = ScoutCoder.path_kind_top_level_module(content)
-          if expected && declared != expected
-            errors << "top-level module must be `#{expected}` (from entity segment); found #{declared ? "`#{declared}`" : 'none'}"
-          end
-          if content =~ /^\s*extend\s+(Entity|EntityWorkflow)\s*$/
-            errors << 'property file must NOT carry an extend line (the entity file owns the extend)'
-          end
-          unless content =~ /^\s*property\s+:(\w+)\s*(=>|\b)/
-            errors << 'no `property :name => :type do ... end` declaration found'
-          end
-          warnings << "property file does not declare `property :#{property}` explicitly (may rely on other declarations)" unless content =~ /^\s*property\s+:(#{Regexp.escape(property)})\b/
+          ScoutCoder::EntityDefinitionSupport.validate_entity_body(content, expected, errors, warnings, property: property) if expected
         end
 
         {'ok' => errors.empty?, 'kind' => 'entity_property', 'op' => 'validate',
@@ -160,10 +150,14 @@ module ScoutCoder
           entity_prj = #{entity_prj.inspect}
           draft = #{target.to_s.inspect}
           stage = 'load'
+          namespace = module_name.rpartition('::').first
+          if !namespace.empty? && !Object.const_defined?(namespace, false) && File.file?('workflow.rb')
+            Workflow.require_workflow './workflow.rb'
+          end
           entity_draft = [entity_tmp, entity_prj].find { |f| f && File.file?(f) }
           load entity_draft if entity_draft
           load draft
-          mod = Object.const_get(module_name) rescue nil
+          mod = Object.const_get(module_name, false) rescue nil
           abort("smoke: failed at stage=define: entity module not defined after workflow load: \#{module_name}") if mod.nil?
           stage = 'register'
           unless mod.properties.keys.map(&:to_s).include?(property.to_s)

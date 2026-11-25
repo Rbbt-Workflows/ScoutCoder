@@ -1640,6 +1640,45 @@ class TestPathKinds < Test::Unit::TestCase
     assert_empty r['warnings']
   end
 
+  def test_qualified_entity_and_property_validate_and_smoke
+    confine_kind_root_to_sandbox!
+    entity = sandbox_kind!('entity')
+    property = sandbox_kind!('entity_property')
+    name = 'NamespaceProbe::AGS::TF'
+    support = ScoutCoder::EntityDefinitionSupport
+    write_draft(entity, name, support.entity_source(name, 'Entity', ''))
+    write_draft(property, "#{name}/label", <<~RUBY)
+      module ::NamespaceProbe::AGS::TF
+        property :label => :single do
+          raise 'smoke must not dispatch'
+        end
+      end
+    RUBY
+    [[entity, name], [property, "#{name}/label"]].each do |kind, path|
+      result = validate_result(kind, path)
+      assert_equal true, result['ok'], result.inspect
+      assert_equal name, result['module']
+      result = smoke_result(kind: kind, path: path)
+      assert_equal true, result['ok'], result.inspect
+      assert_equal name, result['module']
+    end
+    # This compact declaration depends on the checkout defining ScoutCoder.
+    workflow_type = 'ScoutCoder::WorkflowScopedProbe'
+    write_draft(entity, workflow_type, "module ::#{workflow_type}\n  extend Entity\nend\n")
+    assert_equal true, smoke_result(kind: entity, path: workflow_type)['ok']
+    write_draft(entity, name, "module Other::TF\n  extend Entity\nend\n")
+    assert_equal false, validate_result(entity, name)['ok']
+    write_draft(property, "#{name}/label", <<~RUBY)
+      module NamespaceProbe::AGS::TF
+      end
+      module Other::TF
+        property :label do
+        end
+      end
+    RUBY
+    assert_equal false, validate_result(property, "#{name}/label")['ok']
+  end
+
   # Underscore CamelCase (Demo_Widget) is neither canonical nor legacy —
   # a hard validate error carrying the new message.
   def test_entity_validate_hard_rejects_underscore_camelcase
@@ -1652,7 +1691,7 @@ class TestPathKinds < Test::Unit::TestCase
                  r['reasons'].join(' '))
     # The module mismatch must NOT be reported on top: the name was
     # rejected before a module constant could be expected.
-    refute r['reasons'].any? { |reason| reason.include?('top-level module must be') },
+    refute r['reasons'].any? { |reason| reason.include?('module must be') },
            'an invalid name must not also demand a module constant'
   end
 
@@ -1695,12 +1734,12 @@ class TestPathKinds < Test::Unit::TestCase
     write_draft(kind, 'DemoWidget', "module ::Gateway\n  extend Entity\nend\n")
     r = validate_result(kind, 'DemoWidget')
     assert_equal false, r['ok']
-    assert_match(/top-level module must be `DemoWidget` .* found `Gateway`/, r['reasons'].join(' '))
+    assert_match(/module must be `DemoWidget` .* found `Gateway`/, r['reasons'].join(' '))
 
     write_draft(kind, 'demo_widget', "module ::Gateway\n  extend Entity\nend\n")
     r = validate_result(kind, 'demo_widget')
     assert_equal false, r['ok']
-    assert_match(/top-level module must be `DemoWidget` .* found `Gateway`/, r['reasons'].join(' '))
+    assert_match(/module must be `DemoWidget` .* found `Gateway`/, r['reasons'].join(' '))
   end
 
   # Constant collisions are HARD errors, both directions, both pair kinds:

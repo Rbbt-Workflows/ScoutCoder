@@ -32,13 +32,15 @@ Hand-placing these files under `share/` duplicates what the kinds do
 
 ## Naming rules validate enforces
 
-- Entity TYPE names CamelCase `[A-Z][A-Za-z0-9]*` (all-caps acronyms like
-  `TF` allowed); property names snake_case `[a-z][a-z0-9_]*`.
+- Use the full type name, such as `TF` or `AGS::TF`, as one path component.
+  Each constant component uses CamelCase. Property names use snake_case,
+  for example `path=AGS::TF/label`.
 - Legacy snake_case entity names still validate with a warning; two cases
   are HARD errors — constant collisions with a coexisting CamelCase draft,
   and two snake names whose camelized constants collide.
 - The file name's constant must match the module declaration
-  (`DemoWidget.rb` → `module DemoWidget`).
+  (`AGS::TF.rb` declares `AGS::TF`). Nested `module` blocks create the
+  enclosing namespaces when loading a draft in a fresh process.
 
 ## Ownership rules that bite
 
@@ -49,17 +51,20 @@ Hand-placing these files under `share/` duplicates what the kinds do
 - Entity drafts load before property drafts on every workflow reload; a
   property needs its entity to exist first.
 
-## Confirm registration, not just file existence
+## Make promoted entities available
 
-A draft is registered when `reload_workflow` (or a fresh process) plus
-`list_entities` shows the entity in the loaded workflow. Validation and
-smoke are checks inside that loop; which check proves which claim, how to
-run them, and the full validate→smoke→promote order are the sibling
-skill's territory (`scoutcoder-path-kinds-lifecycle`).
+After wiring the promoted entity and properties into the owning workflow,
+force a reload with native `debug_task`: use `workflow: "ScoutCoder"`,
+`task: "reload_workflow"`, the owning checkout's absolute `root` in
+`inputs`, and `clean: true`. An earlier promotion receipt covers the
+wiring present when the file moved.
 
-Do not treat file existence or successful validation as proof the entity
-works; dispatch behavior is exercised through `debug_task` or
-`path_run` (`kind: "test_file"`).
+Verify through the agent that will use the entity. For Research, call
+Semantics' `list_entities`, find the qualified type and property, and
+dispatch `entity_property` on a known identifier. If ScoutCoder and
+Research use separate runtimes, reload in the one serving Research or its
+job-forking parent. Record the observed result or the missing consumer
+check. See [the reload procedure](../../doc/user/PathKinds.md#force-the-reload-and-verify-consumer-access).
 
 ## Identifier TSVs and Python tasks (what to author)
 

@@ -95,6 +95,31 @@ class ListEntitiesTest < Test::Unit::TestCase
     remove_entity(name) if name
   end
 
+  def test_namespaced_entities_with_the_same_leaf_keep_distinct_source_metadata
+    Dir.mktmpdir do |root|
+      %w[First Second].each do |scope|
+        name = "MetadataNames::#{scope}::TF"
+        file = SUPPORT.target_file(root, "#{name}.rb")
+        SUPPORT.write_exclusive(file, SUPPORT.entity_source(name, 'Entity', ''), 'entity')
+        prop = SUPPORT.property_file(root, name, 'label')
+        SUPPORT.write_exclusive(prop, SUPPORT.property_source(name, "property(:label) { 'ok' }"), 'property')
+        entity = SUPPORT.scoutcoder_entity(name, root)
+        load prop
+        record = SUPPORT.entity_inspection(entity, root)
+        assert_equal name, record[:name]
+        assert_equal name, record[:module]
+        assert_equal "share/entities/#{name}.rb", record.dig(:source, :definition)
+        assert_equal ["share/entity_properties/#{name}/label.rb"], record.dig(:source, :property_files)
+        assert_equal ['label'], record[:properties].map { |item| item[:name] }
+      end
+    end
+  ensure
+    if defined?(MetadataNames)
+      Entity::MODULES.delete_if { |mod| mod.name.to_s.start_with?('MetadataNames::') }
+      Object.send(:remove_const, :MetadataNames)
+    end
+  end
+
   def test_task_reports_loaded_entities_and_lib_source_paths
     suffix = "#{Process.pid}_#{SecureRandom.hex(3)}"
     name = "listing_source_probe_#{suffix}"

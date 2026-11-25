@@ -83,7 +83,7 @@ module ScoutCoder
     # destinations anymore — the advisory mapping below documents the
     # convention for agents.)
 
-    # Entity-type name -> top-level module constant. CamelCase entity
+    # Entity-type name -> Ruby constant path. CamelCase entity
     # names (canonical; decision artifact
     # reports/entity-case-convention-decision.md) pass through UNCHANGED;
     # legacy snake_case names camelise by Rule B, following
@@ -94,21 +94,6 @@ module ScoutCoder
     # 1/18).
     def path_kind_entity_module_name(entity)
       ScoutCoder::EntityDefinitionSupport.constant_name(entity)
-    end
-
-    # Top-level module names declared by a piece of Ruby source, in order.
-    # Used for the shape checks: an entity file declares exactly one
-    # top-level module; a property file declares the entity's module.
-    # An optional leading "::" is accepted ("module ::Gene" is legal Ruby
-    # at top level under Kernel#load and still names the bare constant),
-    # so only the BARE name is captured (fix 4, session main.chat#44-48).
-    def path_kind_top_level_modules(source)
-      source.scan(/^module\s+(?:::)?([A-Z]\w*)\s*$/).flatten
-    end
-
-    # First top-level module name declared by the source, or nil.
-    def path_kind_top_level_module(source)
-      path_kind_top_level_modules(source).first
     end
 
     # (entity / entity_property per-tier helpers removed in round 10 — see
@@ -195,7 +180,7 @@ module ScoutCoder
       when 'tmp'
         if tier == 'entity_property'
           # tmp keeps the round-9 nested file spelling <e>/<e>.<p>.rb
-          # (entity/property names are [a-z0-9_], never contain '.')
+          # (entity and property names never contain '.')
           [tier, *rest, segments[-2] + '.' + file + '.rb'].join('/')
         else
           [tier, *rest, file + '.rb'].join('/')

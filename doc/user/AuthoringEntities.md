@@ -10,10 +10,30 @@ reload; the shipped built-in entity tree would live under
 `lib/<workflow>/entity/`, which **does not exist in this checkout**
 (corrected from earlier text that said it "exists but is empty").
 
-Entity-TYPE names are CamelCase: they must match `[A-Z][A-Za-z0-9]*` (e.g.
-`DemoWidget`, or the all-caps acronym `TF`); a name such as `DemoWidget`
-maps to the top-level `::DemoWidget` module. Property names stay
-snake_case (`[a-z][a-z0-9_]*`).
+Use the full Ruby constant name as one virtual path component. Each component
+of the constant matches `[A-Z][A-Za-z0-9]*`, including acronyms such as
+`TF`. Property names use snake_case (`[a-z][a-z0-9_]*`).
+
+| Ruby module | Entity path | Property path |
+|---|---|---|
+| `TF` | `TF` | `TF/label` |
+| `AGS::TF` | `AGS::TF` | `AGS::TF/label` |
+
+For `AGS::TF`, the entity file is `share/entities/AGS::TF.rb`. Define the
+namespace and entity together so the draft can load in a fresh Ruby process:
+
+```ruby
+module AGS
+  module TF
+    extend Entity
+  end
+end
+```
+
+The property file `share/entity_properties/AGS::TF/label.rb` can then
+reopen `module ::AGS::TF`. Ruby's compact declaration requires the parent
+namespace to exist when the file loads. A leading `::` is Ruby source syntax.
+Start the virtual path with the first namespace component.
 
 LEGACY ACCEPTANCE: an old-pattern snake_case entity name
 (`[a-z][a-z0-9_]*`, e.g. `demo_widget`) still validates, with a warning
@@ -28,19 +48,10 @@ and two snake names whose Rule-B constants collide (`a_b` + `a__b` both →
 `var/cortex/artifacts/reports/entity-case-convention-decision.md`
 (corrected path; formerly cited as bare `reports/…`).
 
-The entity base is the `extend Entity` (or `extend EntityWorkflow`) line
-INSIDE the entity file — a hand-authored draft carries its own `module`
-wrapper and its own extend line, because `Kernel#load` evaluates the file
-at top level; `path_validate` (`entity` kind) checks exactly this shape:
-the top-level module must match `constant_name` of the file name
-(`DemoWidget.rb` → `module DemoWidget`, and `TF.rb` → `module TF`, optional
-leading `::` — a legacy `demo_widget.rb` must declare `module DemoWidget`,
-the Rule-B constant) and must contain the extend line. An `entity_property`
-draft conversely must NOT carry an extend line (the entity file owns the
-extend) and must declare `property :name => :type do ... end`;
-`path_validate` checks that too; its entity segment follows the same name
-rules (CamelCase canonical, legacy snake accepted with the warning). A
-typeless `property :plain do` is valid and dispatches as `:both`.
+The entity file declares the module named by its path and calls
+`extend Entity` or `extend EntityWorkflow` inside that module. A property
+draft reopens the same module and declares a property there. A typeless
+`property :plain do` dispatches as `:both`.
 
 ## Generated entity/property file shapes
 
@@ -52,7 +63,7 @@ under `share/entity/<entity>.identifiers.tsv`):
 # share/entities/DemoWidget.rb — the COMPLETE file a draft must be.
 module DemoWidget
   extend EntityWorkflow
-  add_identifiers Path.setup(File.expand_path('../../entity/DemoWidget.identifiers.tsv', __dir__))
+  add_identifiers Path.setup(File.expand_path('../entity/DemoWidget.identifiers.tsv', __dir__))
   annotation :organism
 end
 ```
@@ -141,17 +152,13 @@ to the built-in tree expecting the LiveWorkflow loader to discover them.
 
 ## Production versus development dispatch
 
-There are two distinct surfaces for dispatching a property. A production
-dispatch surface — such as Semantics' `entity_property` task — dispatches
-what its own process loaded; it deliberately does NOT reload drafts defined
-after its process started, so a fresh `share/` draft is invisible to it
-until that process reloads the workflow. That is expected behavior, not a
-defect. Development verification of a fresh draft therefore goes through
-`path_run` with `kind: "probe"` (see
-[path_run](PathKinds.md#path_run-one-operation-two-runnable-kinds)): its
-fresh child preloads the owning checkout's `workflow.rb`, so LiveWorkflow
-live-loads the current `share/` drafts and the probe dispatches the
-property exactly as a newly-loaded process would.
+Use `path_run` with `kind: "probe"` to exercise a draft in a fresh
+Ruby process that loads the owning checkout. After promoting and wiring
+the definitions, **force a reload of that checkout in the runtime serving
+the consumer**. For Research, verify that Semantics lists the full entity
+type and that `entity_property` returns the expected value for a known
+identifier. A reload performed only by a separate ScoutCoder process
+updates its own registry. Follow [the reload procedure](PathKinds.md#force-the-reload-and-verify-consumer-access).
 
 ## Inspecting entities with list_entities
 
@@ -169,9 +176,10 @@ workflow reload re-extends the same module object, which would otherwise
 duplicate rows). Its sorted results include each entity's name, module,
 detected base kind, annotations, formats, identifier files, registered
 properties, effective dispatch, persistence flags, plus inferred
-source-path fields. Source paths are inferred from the conventional
-`lib/<workflow>/entity/` layout, not tracked from Ruby's runtime source
-locations, so framework modules report no checkout paths. Effective dispatch
+source-path fields. ScoutCoder looks for the full module name in its
+`share/entities/` drafts and the corresponding `share/entity_properties/`
+directory. For example, `AGS::TF` and `Other::TF` have separate source
+entries. Effective dispatch
 is inferred from generated method names, so it cannot distinguish the
 original `:single2array` alias from `:single`, or `:array2single` from
 `:array`. The underlying helper also accepts an explicit module scope, which

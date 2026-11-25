@@ -8,7 +8,7 @@ module ScoutCoder
     # names (LEGACY_NAME) are accepted with a warning, never renamed.
     # Property names stay snake_case (PROPERTY_NAME) — properties are
     # methods, entity types are Ruby constants.
-    NAME = /\A[A-Z][A-Za-z0-9]*\z/
+    NAME = /\A[A-Z][A-Za-z0-9]*(?:::[A-Z][A-Za-z0-9]*)*\z/
     LEGACY_NAME = /\A[a-z][a-z0-9_]*\z/
     PROPERTY_NAME = /\A[a-z][a-z0-9_]*\z/
     BASES = { 'Entity' => 'Entity', 'EntityWorkflow' => 'EntityWorkflow' }.freeze
@@ -32,7 +32,7 @@ module ScoutCoder
         warnings << entity_name_warning(value) if warnings
       when :invalid
         raise ArgumentError,
-              "invalid #{label} #{value.inspect}; expected CamelCase [A-Z][A-Za-z0-9]* " \
+              "invalid #{label} #{value.inspect}; expected CamelCase [A-Z][A-Za-z0-9]* components separated by :: " \
               '(legacy snake_case [a-z][a-z0-9_]* is accepted with a warning)'
       end
       value
@@ -74,7 +74,7 @@ module ScoutCoder
       if this_case == :legacy
         warnings << entity_name_warning(value)
       elsif this_case != :canonical
-        errors << "invalid #{label} #{value.inspect}: expected CamelCase [A-Z][A-Za-z0-9]* " \
+        errors << "invalid #{label} #{value.inspect}: expected CamelCase [A-Z][A-Za-z0-9]* components separated by :: " \
                   '(legacy snake_case [a-z][a-z0-9_]* is accepted with a warning)'
         return nil
       end
@@ -261,6 +261,68 @@ module ScoutCoder
       value.is_a?(Array) && value[0].is_a?(Symbol) && (type.nil? || value[0] == type)
     end
 
+    def declaration_path(node, scope)
+      case node.first
+      when :var_ref, :const_ref then [scope, node[1][1]].compact.join('::') if node[1][0] == :@const
+      when :top_const_ref then node[1][1]
+      when :const_path_ref
+        parent = declaration_path(node[1], scope)
+        "#{parent}::#{node[2][1]}" if parent
+      end
+    end
+
+    def module_bodies(statements, scope = nil, result = {})
+      statements.each do |node|
+        next unless node[0] == :module
+        name = declaration_path(node[1], scope)
+        next unless name
+        body = node[2][1]
+        (result[name] ||= []).concat(body)
+        module_bodies(body, name, result)
+      end
+      result
+    end
+
+    def property_names(statements)
+      statements.filter_map do |node|
+        call = node[0] == :method_add_block ? node[1] : node
+        arguments = case call[0]
+                    when :command
+                      call[2] if identifier_name(call[1]) == 'property'
+                    when :method_add_arg
+                      call.dig(2, 1) if call_method_name(call[1]) == 'property'
+                    end
+        next unless ast_node?(arguments, :args_add_block)
+        argument = arguments.dig(1, 0)
+        next unless argument
+        argument = argument.dig(1, 0, 1) if argument.first == :bare_assoc_hash
+        argument.dig(1, 1, 1) if argument && argument.first == :symbol_literal
+      end
+    end
+
+    def validate_entity_body(content, expected, errors, warnings, property: nil)
+      statements = Ripper.sexp(content).fetch(1)
+      modules = module_bodies(statements)
+      body = modules[expected]
+      unless body
+        found = modules.keys.map { |name| "`#{name}`" }.join(', ')
+        errors << "module must be `#{expected}` (from path); found #{found.empty? ? 'none' : found}"
+        return
+      end
+      extends = body.any? do |node|
+        %i[command command_call method_add_arg].include?(node.first) && contains_entity_extension_call?(node)
+      end
+      if property
+        errors << 'property file must NOT carry an extend line (the entity file owns the extend)' if extends
+        names = property_names(body)
+        errors << 'no `property :name => :type do ... end` declaration found' if names.empty?
+        warnings << "property file does not declare `property :#{property}` explicitly (may rely on other declarations)" unless names.include?(property)
+      else
+        errors << 'no `extend Entity` / `extend EntityWorkflow` declaration inside the module' unless extends
+        warnings << 'multiple top-level modules found (an entity file should declare exactly one)' if statements.count { |node| node.first == :module } > 1
+      end
+    end
+
     def tokens(source)
       # Ripper emits spaces and newlines as tokens; discard them so syntactic
       # neighbors such as `extend Entity` remain adjacent for declaration checks.
@@ -277,24 +339,25 @@ module ScoutCoder
     def entity_source(name, base, definition, identifiers: false)
       constant = constant_name(name)
       identifier_source = if identifiers
-                            "  add_identifiers Path.setup(File.expand_path('../entity/#{name}.identifiers.tsv', __dir__))\n"
+                            "add_identifiers Path.setup(File.expand_path('../entity/#{name}.identifiers.tsv', __dir__))\n"
                           else
                             ''
                           end
-      <<~RUBY
-        module ::#{constant}
-          extend #{base}
-        #{identifier_source}#{definition.lines.map { |line| "  #{line}" }.join.rstrip}
-        end
-      RUBY
+      body = "extend #{base}\n" + identifier_source + definition
+      wrap_entity_module(constant, body)
+    end
+
+    def wrap_entity_module(constant, body)
+      parts = constant.split('::')
+      parts[0] = "::#{parts.first}"
+      parts.reverse_each.reduce(body) do |inner, part|
+        indented = inner.rstrip.lines.map { |line| "  #{line.chomp}\n" }.join
+        "module #{part}\n#{indented}end\n"
+      end
     end
 
     def property_source(entity_name, definition)
-      <<~RUBY
-        module ::#{constant_name(entity_name)}
-        #{definition.lines.map { |line| "  #{line}" }.join.rstrip}
-        end
-      RUBY
+      wrap_entity_module(constant_name(entity_name), definition)
     end
 
     def reload!(target, label, root = project_root)
@@ -406,10 +469,16 @@ module ScoutCoder
     end
 
     def entity_source_metadata(entity, root)
-      constant = entity.name.to_s.split('::').last
+      constant = entity.name.to_s
       entity_dir = File.join(root, 'share', 'entities')
       definition_files = File.directory?(entity_dir) ? Dir.glob(File.join(entity_dir, '*.rb')).sort.select { |path| constant_name(File.basename(path, '.rb')) == constant } : []
-      name = definition_files.empty? ? entity_name_from_constant(constant) : File.basename(definition_files.first, '.rb')
+      name = if definition_files.any?
+               File.basename(definition_files.first, '.rb')
+             elsif constant.include?('::')
+               constant
+             else
+               entity_name_from_constant(constant)
+             end
       property_dir = File.join(root, 'share', 'entity_properties', name)
       property_files = File.directory?(property_dir) ? Dir.glob(File.join(property_dir, '**', '*.rb')).sort : []
       { name: name, definition: definition_files.empty? ? nil : checkout_path(definition_files.first, root),

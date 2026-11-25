@@ -16,7 +16,7 @@ the repository `README.md` (`# Tasks` section).
   production vs development dispatch.
 - [Path kinds operational guide](PathKinds.md) — using the six `path_*`
   kinds: virtual paths, validate, smoke, `path_run` (tests and probes),
-  promote, wiring, lifecycle.
+  promote, wiring, and [forcing a reload for the intended consumer](PathKinds.md#force-the-reload-and-verify-consumer-access).
 - [Testing and execution](Testing.md) — choosing a runner, authoring and
   running tests, exit codes, running a task directly, documentation during
   promotion.

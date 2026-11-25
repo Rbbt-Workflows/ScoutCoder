@@ -31,9 +31,14 @@ Virtual-path rules, per-kind roots and validate check lists are owned by
    (`kind: "test_file"`) is its executing check.
 5. **Promote** — `path_promote` moves exactly ONE resource to the project
    side; promote the paired test SEPARATELY through the `test_file` kind.
-6. **Wire** — edit `workflow.rb` with Workspace; only then is the promoted
-   artifact live. Verify from a fresh process (`reload_workflow` or a new
-   process) after wiring.
+6. **Wire and force a reload.** Confirm the owning checkout's loader includes
+   the promoted source. After the final edit, run native `debug_task` with
+   `workflow: "ScoutCoder"`, `task: "reload_workflow"`, the absolute target
+   `root` in `inputs`, and `clean: true`. This applies to single promotions
+   as well as deferred batches.
+7. **Verify availability.** Have the intended caller invoke the exported
+   task or discover the qualified entity and dispatch its property on a
+   known fixture. A fresh-process smoke test checks the development checkout.
 
 ## Choosing the check (decision table)
 
@@ -67,17 +72,11 @@ never smoke alone.
   2. promote each property with `defer_reload: true`;
   3. wire `workflow.rb`: entity require BEFORE the LiveWorkflow share
      load, property require AFTER;
-  4. fire exactly ONE explicit `reload_workflow` with the checkout `root`
-     (or `debug_task` with `clean: true` on the reload job);
-  5. verify from a fresh process that the wired artifact loads.
+  4. force the reload in the consumer's tool runtime or the parent that
+     will fork its jobs, then verify through the intended caller as above.
 
-- Permanent source/wiring changes are explicit Workspace edits; inspect
-  before editing, smallest scoped change, preserve conventions.
-- After promotion + wiring, verify the workflow from a fresh process — a
-  successful promote is not proof of correct behavior.
-- `reload_workflow` is the in-process way to see drafts; a single promote
-  fires it automatically through the `promotion_post_move` hook unless
-  deferred as above.
+For tool arguments, receipt fields and handling a separate consumer process,
+see [the reload procedure](../../doc/user/PathKinds.md#force-the-reload-and-verify-consumer-access).
 
 ## Fresh process is not fresh result
 

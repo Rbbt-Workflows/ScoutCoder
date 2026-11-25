@@ -12,9 +12,6 @@ require 'tmpdir'
 #           property module-match for `entity_property`): the session
 #           evidence (main.chat#44-48) showed the old detector rejecting a
 #           legal Ruby top-level spelling with a misleading "found none".
-#           The detector now accepts an optional leading "::" while
-#           capturing the bare name
-#           (path_kinds/test_file.rb path_kind_top_level_modules).
 #   fix 2 — every path-tool-facing kind description carries one compact
 #           virtual-path GRAMMAR statement (relative to the kind root, no
 #           .rb suffix, no physical prefix; nested for entity_property;
@@ -135,15 +132,7 @@ class TestPathKindContractFixes < Test::Unit::TestCase
     write_draft('entity', 'other_thing', "module ::Gene\n  extend Entity\nend\n")
     r = validate_result('entity', 'other_thing')
     assert_equal false, r['ok']
-    assert_match(/top-level module must be `OtherThing`/, r['reasons'].join(' '))
-  end
-
-  def test_top_level_modules_helper_captures_bare_name_for_both_spellings
-    mods = ScoutCoder.path_kind_top_level_modules(
-      "module ::Gene\nend\nmodule Foo\nend\nmodule ::Bar::Baz\nend\nmodule Nested::Mod\nend\n"
-    )
-    assert_equal %w[Gene Foo], mods,
-                 'leading :: accepted; nested/qualified names are NOT top-level declarations'
+    assert_match(/module must be `OtherThing`/, r['reasons'].join(' '))
   end
 
   # ------------------------------------------------------------ fix 2 tests

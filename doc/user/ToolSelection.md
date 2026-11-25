@@ -72,7 +72,8 @@ Path-kind promotion moves exactly one resource. It does not wire a
 task/entity/property into `workflow.rb`, load a promoted file, relocate a
 paired test, or coordinate a multi-file change. Promote related resources
 separately and make permanent source/wiring changes explicitly with
-Workspace. Verify the resulting workflow from a fresh process.
+Workspace. After final wiring, force a reload of the owning checkout and
+verify through the intended caller. See [the reload procedure](PathKinds.md#force-the-reload-and-verify-consumer-access).
 
 Do not commit, push, or merge unless explicitly asked. Report the actual
 checks performed and keep unresolved failures or unverified assumptions

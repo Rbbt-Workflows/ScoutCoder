@@ -239,27 +239,18 @@ List the workflows installed and available to ScoutCoder
 Takes no inputs. Unions `Workflow.installed_workflows` (a purely local scan of the `workflows` pathmap, never triggering network autoinstall) with the workflow modules already loaded in the process, deduplicated and sorted; the local scan is wrapped so the task never crashes. The discovery step for workflow names: every returned name is usable as the `repo` input of the documentation lookup tasks.
 
 ## reload_workflow
-Update a workflow to load any promoted elements (e.g. tasks or entities)
+Reloads a workflow in the current execution process.
 
-Inputs: optional `root` (a workflow checkout — a directory containing
-`workflow.rb`; defaults to the ScoutCoder checkout, since its own lib/ edits
-are the live concern). Purges every `$LOADED_FEATURES` entry under the
-realpathed root (cached entrypoint included) and re-evaluates `workflow.rb`
-so `require_relative` lines re-fire — lib edits and promotions take effect
-immediately; features outside the root are never purged, and errors are
-loud. Returns a report (`ok`, `root`, `entrypoint`, `purged`, `workflow`,
-`reload`). `clean` is not an input of this tool — it belongs to `debug_task`
-(`debug_task` with `clean: true` recomputes the addressed job and is the
-documented way to force a fresh execution: without `clean`, a job —
-default-root or explicit-root — replays a cached execution when one
-exists).
-This is the explicit reload surface for lib-location edits (the
-no-autorun contract forbids automatic triggering). Promotions reload
-immediately by default through the `promotion_post_move` hook, and their
-result reports `promotion_status` (`succeeded`, `reload_failed` — the
-completed move plus the original diagnostic — or `deferred`); related
-promotions (e.g. an entity, then its properties) may instead pass the
-caller argument `defer_reload` and fire exactly one explicit reload after
-wiring. Reload internals:
-[LiveWorkflow and WorkflowReload](doc/developer/LiveWorkflow.md).
+Reload a workflow to make newly created or modified tasks, entities, and properties available in the current execution process.
 
+After promoting Ruby tasks, entities, or properties, finish wiring the project loader and reload the checkout containing the edited `workflow.rb`. A single promotion's automatic reload precedes any subsequent wiring edits. Related promotions can use `defer_reload: true` and share one post-wiring reload.
+
+Pass the absolute checkout directory as `root`. The helper purges cached Ruby features under that root and re-evaluates its entrypoint. It returns `ok`, `root`, `entrypoint`, `purged`, `workflow`, and `reload`.
+
+Delegated agents execute in isolated processes. Changes to workflow source files are shared, but loaded definitions are process-local. Reloading a workflow in a delegated ScoutCoder conversation does not update the requesting agent's runtime. Agents consuming newly developed capabilities should invoke `reload_workflow` themselves.
+
+Reloading makes entity definitions and properties available through Semantics without requiring changes to its tool definitions. Newly exported tasks, however, become callable tools only when the agent's tooling is reconstructed. Subsequent delegations inherit the updated runtime and can discover the new tasks when their tooling is prepared, provided the workflow is exposed to them.
+
+Reloading does not invalidate persisted computational results. Use the appropriate job refresh mechanism when results need to be recomputed.
+
+[Exact arguments, receipt fields and consumer checks](doc/user/PathKinds.md#force-the-reload-and-verify-consumer-access)

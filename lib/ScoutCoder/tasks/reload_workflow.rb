@@ -1,11 +1,10 @@
 # Promoted task: documentation lives in README.md (## reload_workflow), not desc.
 module ScoutCoder
 
-  desc 'Reload a workflow checkout in the running process: purge $LOADED_FEATURES entries whose realpath falls under the checkout root (entrypoint included when cached), then re-evaluate workflow.rb so lib/ edits and promotions take effect immediately. Default root: the ScoutCoder checkout itself (its own lib/ edits are the live concern); pass root explicitly to reload any other workflow checkout. Returns a report (ok, root, entrypoint, purged list, reload mode, workflow module).'
-  input :root, :string, 'OPTIONAL workflow checkout root (a directory containing workflow.rb); defaults to the ScoutCoder checkout root', nil, nofile: true
+  input :root, :string, 'Workflow checkout root (a directory containing workflow.rb); defaults to the current repo', 'current', nofile: true
   task :reload_workflow => :json do |root|
     begin
-      root = Scout.root.find if root.nil? || root.to_s.empty?
+      root = Scout.root.find if root.nil? || root.to_s.empty? || root.to_s == 'current'
       report = ScoutCoder::WorkflowReload.reload_workflow!(root: root)
       # The module object is not JSON-serializable; name it for the report.
       report['workflow'] = report['workflow'].name
@@ -16,6 +15,6 @@ module ScoutCoder
       raise ParameterException, "reload_workflow failed: #{error.class}: #{error.message}"
     end
   end
-  export :reload_workflow
+  export_exec :reload_workflow
 
 end

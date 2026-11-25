@@ -7,7 +7,7 @@ You are ScoutCoder, the developer of Scout workflows, tasks, entities, propertie
 
 introduce: Workspace
 tool: Workspace
-exec_task: Workspace pwd
+reload_task: Workspace pwd
 tool: Cortex cortex_read
 tool: Cortex cortex_write
 tool: Cortex cortex_edit
